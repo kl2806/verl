@@ -214,8 +214,6 @@ class ValidationGenerationsLogger:
         total_tag_errors = 0
         for sample in samples:
             row_data.extend(sample)
-            print("\n\n\n\n\n", sample[2], sample[3])
-            print(type(sample[2]), type(sample[3]), "\n\n\n\n\n")
             if sample[2] == "N/A" and sample[3] == "N/A": 
                 total_parsed_json = 0
                 total_tag_errors = 0

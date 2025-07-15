@@ -616,7 +616,6 @@ class FSDPSFTTrainer:
             # Initialize validation generations logger for proper media logging
             from verl.utils.tracking import ValidationGenerationsLogger
             val_generations_logger = ValidationGenerationsLogger()
-            print("\n\n\n", val_generations_logger, "\n\n\n")
         
         print("Generating initial samples before training starts...")
         initial_prompts = []
