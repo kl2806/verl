@@ -214,6 +214,8 @@ class ValidationGenerationsLogger:
         row_data.append(step)
         for sample in samples:
             row_data.extend(sample)
+        
+        new_table.add_data(*row_data)
 
         # Update reference and log
         wandb.log({"val/generations": new_table}, step=step)

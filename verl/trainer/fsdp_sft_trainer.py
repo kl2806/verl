@@ -721,7 +721,7 @@ class FSDPSFTTrainer:
                         tag_errors_count = 0
                         for i, generation in enumerate(generations):
                             json_valid, error_msg, parsed_json = validate_json_generation(generation)
-                            if (generation.count("<tool_call>") != 1 or generation.count("<tool_call>") != generation.count("</tool_call>")):
+                            if (generation.count("<tool_call>") != generation.count("</tool_call>")):
                                 tag_errors_count += 1
                                 print(f"✗ Generation {i+1} has a mismatched number of <tool_call> tags")
                             else: print(f"✓ Generation {i+1} has a correct number of <tool_call> tags")
