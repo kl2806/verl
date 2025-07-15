@@ -200,9 +200,7 @@ class ValidationGenerationsLogger:
         """Log samples to wandb as a table"""
         import wandb
 
-        # Create column names for all samples
-        columns = ["step"] + sum([[f"input_{i + 1}", f"output_{i + 1}", f"score_{i + 1}"] for i in range(len(samples))], [])
-
+        columns = ["step"] + sum([[f"input_{i + 1}", f"output_{i + 1}", f"json_parse_rate_{i + 1}", f"tag_errors_{i + 1}"] for i in range(len(samples))], []) # + ["total_parsed_json", "total_tag_errors"]
         if not hasattr(self, "validation_table"):
             # Initialize the table on first call
             self.validation_table = wandb.Table(columns=columns)
@@ -216,8 +214,6 @@ class ValidationGenerationsLogger:
         row_data.append(step)
         for sample in samples:
             row_data.extend(sample)
-
-        new_table.add_data(*row_data)
 
         # Update reference and log
         wandb.log({"val/generations": new_table}, step=step)

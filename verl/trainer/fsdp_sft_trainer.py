@@ -603,6 +603,8 @@ class FSDPSFTTrainer:
         print(f"Current rank: {rank}")
         
         # TODO: add a unified tracking
+        tracking = None
+        val_generations_logger = None
         if rank == 0:
             from omegaconf import OmegaConf
             tracking = Tracking(
@@ -630,7 +632,7 @@ class FSDPSFTTrainer:
             if ten == 10:
                 break
         
-        if rank == 0 and initial_prompts and initial_generations:
+        if rank == 0 and initial_prompts and initial_generations and val_generations_logger is not None and tracking is not None:
             initial_samples = []
             num_initial_samples_to_log = min(10, len(initial_prompts))
             for i in range(num_initial_samples_to_log):
@@ -647,14 +649,16 @@ class FSDPSFTTrainer:
                 print("-" * 50)
             
             # Log initial samples without JSON metrics
-            tracking.log(data={"initial/samples_generated": len(initial_generations)}, step=0)
+            if tracking is not None:
+                tracking.log(data={"initial/samples_generated": len(initial_generations)}, step=0)
             
             # Log sample examples as text to wandb
             for i, (prompt, generation) in enumerate(zip(initial_prompts[:3], initial_generations[:3])):
-                tracking.log(data={
-                    f"initial/prompt_{i+1}": prompt,
-                    f"initial/generation_{i+1}": generation
-                }, step=0)
+                if tracking is not None:
+                    tracking.log(data={
+                        f"initial/prompt_{i+1}": prompt,
+                        f"initial/generation_{i+1}": generation
+                    }, step=0)
         
         torch.distributed.barrier()
 
@@ -682,7 +686,7 @@ class FSDPSFTTrainer:
                 global_step += 1
                 data = TensorDict(data, batch_size=self.config.data.train_batch_size).cuda()
                 metric = self.training_step(data)
-                if rank == 0:
+                if rank == 0 and tracking is not None:
                     tracking.log(data=metric, step=global_step)
 
                 # for early exit validation
@@ -720,9 +724,11 @@ class FSDPSFTTrainer:
                             if (generation.count("<tool_call>") != 1 or generation.count("<tool_call>") != generation.count("</tool_call>")):
                                 tag_errors_count += 1
                                 print(f"✗ Generation {i+1} has a mismatched number of <tool_call> tags")
+                            else: print(f"✓ Generation {i+1} has a correct number of <tool_call> tags")
                             if (generation.count("<think>") != generation.count("</think>")): 
                                 tag_errors_count += 1
                                 print(f"✗ Generation {i+1} has a mismatched number of think tags")
+                            else: print(f"✓ Generation {i+1} has a correct number of think tags")
                             if ("<inner_monologue>" in generation or "</inner_monologue>" in generation):
                                 tag_errors_count += 1
                                 print(f"✗ Generation {i+1} has an inner monologue")
@@ -761,18 +767,21 @@ class FSDPSFTTrainer:
                     
                     # Log sample examples as text to wandb
                     for i, (prompt, generation) in enumerate(zip(all_prompts[:3], all_generations[:3])):
-                        tracking.log(data={
-                            f"val/prompt_{i+1}": prompt,
-                            f"val/generation_{i+1}": generation
-                        }, step=global_step)
+                        if tracking is not None:
+                            tracking.log(data={
+                                f"val/prompt_{i+1}": prompt,
+                                f"val/generation_{i+1}": generation
+                            }, step=global_step)
                 
                 
                     val_samples = []
                     for prompt, generation in zip(all_prompts, all_generations):
                         val_samples.append([prompt, generation,  f"{json_valid_count}/{total_generations}", f"{tag_errors_count}"])
-                    val_generations_logger.log(tracking.logger.keys(), val_samples, global_step)
+                    if val_generations_logger is not None and tracking is not None:
+                        val_generations_logger.log(tracking.logger.keys(), val_samples, global_step)
                 
-                tracking.log(data=metric, step=global_step)
+                if tracking is not None:
+                    tracking.log(data=metric, step=global_step)
             torch.distributed.barrier()
 
             # save checkpoint
