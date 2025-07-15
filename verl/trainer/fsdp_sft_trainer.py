@@ -698,6 +698,8 @@ class FSDPSFTTrainer:
             val_losses = []
             all_prompts = []
             all_generations = []
+            json_rates = []
+            tag_errors = []
             
             # Collect a few samples for generation (limit to avoid too much output)
             max_samples_to_generate = int(os.getenv("VERL_MAX_VAL_SAMPLES", 
@@ -742,6 +744,8 @@ class FSDPSFTTrainer:
                         # Print summary statistics
                         json_valid_rate = (json_valid_count / total_generations * 100) if total_generations > 0 else 0
                         print(f"JSON Validation Summary: {json_valid_count}/{total_generations} ({json_valid_rate:.1f}%) valid JSON generations")
+                        json_rates.append(json_valid_rate)
+                        tag_errors.append(tag_errors_count)
 
                         
                             
@@ -775,8 +779,8 @@ class FSDPSFTTrainer:
                 
                 
                     val_samples = []
-                    for prompt, generation in zip(all_prompts, all_generations):
-                        val_samples.append([prompt, generation,  f"{json_valid_count}/{total_generations}", f"{tag_errors_count}"])
+                    for prompt, generation, json_rate, tag_error in zip(all_prompts, all_generations, json_rates, tag_errors):
+                        val_samples.append([prompt, generation,  f"{json_rate}%", f"{tag_error}"])
                     if val_generations_logger is not None and tracking is not None:
                         val_generations_logger.log(tracking.logger.keys(), val_samples, global_step)
                 

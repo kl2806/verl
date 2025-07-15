@@ -209,9 +209,7 @@ class ValidationGenerationsLogger:
         # Workaround for https://github.com/wandb/wandb/issues/2981#issuecomment-1997445737
         new_table = wandb.Table(columns=columns, data=self.validation_table.data)
 
-        # Add new row with all data
-        row_data = []
-        row_data.append(step)
+        row_data = [step]
         for sample in samples:
             row_data.extend(sample)
         
