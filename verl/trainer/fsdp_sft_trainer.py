@@ -96,7 +96,7 @@ def validate_json_generation(generation_text):
         parsed_json = json.loads(to_parse)
         return True, None, parsed_json
     except json.JSONDecodeError as json_err:
-        print(to_parse)
+        # print(to_parse)
         return False, f"JSON decode error: {json_err}", None
     except Exception as parse_err:
         return False, f"Parsing error: {parse_err}", None
@@ -639,7 +639,6 @@ class FSDPSFTTrainer:
                 prompt_text = initial_prompts[i]
                 generation_text = initial_generations[i]
                 initial_samples.append([prompt_text, generation_text, "N/A", "N/A"])  # No score available
-            
             val_generations_logger.log(tracking.logger.keys(), initial_samples, 0)  # Step 0 for initial samples
             
             print(f"\n=== Initial Samples (Before Training) ===")

@@ -200,7 +200,7 @@ class ValidationGenerationsLogger:
         """Log samples to wandb as a table"""
         import wandb
 
-        columns = ["step"] + sum([[f"input_{i + 1}", f"output_{i + 1}", f"json_parse_rate_{i + 1}", f"tag_errors_{i + 1}"] for i in range(len(samples))], []) # + ["total_parsed_json", "total_tag_errors"]
+        columns = ["step"] + sum([[f"input_{i + 1}", f"output_{i + 1}", f"json_parse_rate_{i + 1}", f"tag_errors_{i + 1}"] for i in range(len(samples))], []) + ["total_parsed_json", "total_tag_errors"]
         if not hasattr(self, "validation_table"):
             # Initialize the table on first call
             self.validation_table = wandb.Table(columns=columns)
@@ -210,8 +210,20 @@ class ValidationGenerationsLogger:
         new_table = wandb.Table(columns=columns, data=self.validation_table.data)
 
         row_data = [step]
+        total_parsed_json = 0
+        total_tag_errors = 0
         for sample in samples:
             row_data.extend(sample)
+            print("\n\n\n\n\n", sample[2], sample[3])
+            print(type(sample[2]), type(sample[3]), "\n\n\n\n\n")
+            if sample[2] == "N/A" and sample[3] == "N/A": 
+                total_parsed_json = 0
+                total_tag_errors = 0
+            else:
+                percentage_str = sample[2].rstrip('%')
+                total_parsed_json += float(percentage_str) / 100
+                total_tag_errors += int(sample[3])
+        row_data.extend([total_parsed_json, total_tag_errors])
         
         new_table.add_data(*row_data)
 
