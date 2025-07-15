@@ -207,6 +207,13 @@ class FSDPSFTTrainer:
         trust_remote_code = self.config.model.trust_remote_code
         # load config first
         config = AutoConfig.from_pretrained(local_model_path, trust_remote_code=trust_remote_code)
+        
+        # Set dropout rates if specified in config
+        if hasattr(self.config.model, 'attention_dropout'):
+            config.attention_dropout = self.config.model.attention_dropout
+        if hasattr(self.config.model, 'hidden_dropout'):
+            config.hidden_dropout = self.config.model.hidden_dropout
+            
         if self.config.ulysses_sequence_parallel_size > 1:
             assert self.use_remove_padding, "Sequence parallel is only supported when remove_padding is enabled"
 
