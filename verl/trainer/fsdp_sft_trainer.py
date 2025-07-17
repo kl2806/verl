@@ -617,16 +617,16 @@ class FSDPSFTTrainer:
                             if isinstance(prompt_list, list) and prompt_list:
                                 # For full conversations, format the prompt nicely
                                 if len(prompt_list) > 1:
-                                    # Extract key parts of the conversation
-                                    system_msg = next((msg for msg in prompt_list if msg.get('role') == 'system'), None)
-                                    user_msgs = [msg for msg in prompt_list if msg.get('role') == 'user']
+                                    # Format the entire conversation for validation generation
+                                    conversation_parts = []
+                                    for msg in prompt_list:
+                                        role = msg.get('role', '').upper()
+                                        content = msg.get('content', '')
+                                        if role and content:
+                                            conversation_parts.append(f"{role}: {content}")
                                     
-                                    if system_msg and user_msgs:
-                                        system_content = system_msg.get('content', '')
-                                        # Show first 200 chars of system message
-                                        system_preview = system_content[:200] + "..." if len(system_content) > 200 else system_content
-                                        last_user_msg = user_msgs[-1].get('content', '')
-                                        prompt_text = f"SYSTEM: {system_preview}\nUSER: {last_user_msg}"
+                                    if conversation_parts:
+                                        prompt_text = "\n".join(conversation_parts)
                                     else:
                                         prompt_text = str(prompt_list[-1].get('content', ''))
                                 else:
@@ -645,16 +645,16 @@ class FSDPSFTTrainer:
                             if isinstance(prompt_list, list) and prompt_list:
                                 # For full conversations, format the prompt nicely
                                 if len(prompt_list) > 1:
-                                    # Extract key parts of the conversation
-                                    system_msg = next((msg for msg in prompt_list if msg.get('role') == 'system'), None)
-                                    user_msgs = [msg for msg in prompt_list if msg.get('role') == 'user']
+                                    # Format the entire conversation for validation generation
+                                    conversation_parts = []
+                                    for msg in prompt_list:
+                                        role = msg.get('role', '').upper()
+                                        content = msg.get('content', '')
+                                        if role and content:
+                                            conversation_parts.append(f"{role}: {content}")
                                     
-                                    if system_msg and user_msgs:
-                                        system_content = system_msg.get('content', '')
-                                        # Show first 200 chars of system message
-                                        system_preview = system_content[:200] + "..." if len(system_content) > 200 else system_content
-                                        last_user_msg = user_msgs[-1].get('content', '')
-                                        prompt_text = f"SYSTEM: {system_preview}\nUSER: {last_user_msg}"
+                                    if conversation_parts:
+                                        prompt_text = "\n".join(conversation_parts)
                                     else:
                                         prompt_text = str(prompt_list[-1].get('content', ''))
                                 else:
