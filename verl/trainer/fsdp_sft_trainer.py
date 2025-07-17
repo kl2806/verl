@@ -673,6 +673,7 @@ class FSDPSFTTrainer:
         
         if rank == 0:
             prompts, generations = self.generate_samples(use_validation_prompts=True)
+            print(f"Prompts: {prompts}")
             initial_prompts.extend(prompts)
             initial_generations.extend(generations)
         
@@ -758,6 +759,9 @@ class FSDPSFTTrainer:
                     prompts, generations = self.generate_samples(use_validation_prompts=True)
                     all_prompts.extend(prompts)
                     all_generations.extend(generations)
+
+                    json_rates = []
+                    tag_errors = []
                     
                     # script to check how many outputs parsed correctly 
                     json_valid_count = 0
@@ -776,12 +780,14 @@ class FSDPSFTTrainer:
                         if ("<inner_monologue>" in generation or "</inner_monologue>" in generation):
                             tag_errors_count += 1
                             print(f"✗ Generation {i+1} has an inner monologue")
+                        tag_errors.append(tag_errors_count)
                         
                         if json_valid:
                             json_valid_count += 1
                             print(f"✓ Generation {i+1} parses as valid JSON")
                         else:
                             print(f"✗ Generation {i+1} failed JSON parsing: {error_msg}")
+                        json_rates.append(json_valid_count)
                     
                     # Print summary statistics
                     json_valid_rate = (json_valid_count / total_generations * 100) if total_generations > 0 else 0
