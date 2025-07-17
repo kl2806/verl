@@ -480,13 +480,25 @@ class FSDPSFTTrainer:
                 # Extract the messages from the row
                 messages = row['messages']
                 if messages is not None and len(messages) > 0:
-                    # Filter out system messages and only keep user messages
-                    user_messages = [msg for msg in messages if msg.get('role') == 'user']
-                    if user_messages:
-                        # Use the last user message as the prompt
-                        last_user_message = user_messages[-1]
-                        prompt_data.append([{"role": "user", "content": last_user_message.get('content', '')}])
-                        count += 1
+                    # Convert numpy array to list and process full conversation
+                    messages_list = messages.tolist() if hasattr(messages, 'tolist') else messages
+                    
+                    # Process the full conversation, adding /no_think to system prompts
+                    processed_messages = []
+                    for msg in messages_list:
+                        if isinstance(msg, dict) and "content" in msg:
+                            processed_msg = msg.copy()
+                            content = msg["content"]
+                            if isinstance(content, str) and content.strip().startswith("<base_instructions>"):
+                                # Add /no_think to system prompts
+                                processed_msg["content"] = content + "\n/no_think"
+                            processed_messages.append(processed_msg)
+                        else:
+                            processed_messages.append(msg)
+                    
+                    # Use the full conversation as the prompt
+                    prompt_data.append(processed_messages)
+                    count += 1
             
             print(f"Loaded {len(prompt_data)} prompts from validation_generation_prompts.parquet")
             return prompt_data
@@ -558,7 +570,12 @@ class FSDPSFTTrainer:
                     batch_texts = []
                     for prompt_list in batch_prompts:
                         if isinstance(prompt_list, list) and prompt_list:
-                            text = prompt_list[-1].get('content', str(prompt_list))
+                            # For full conversations, get the last user message for fallback
+                            user_messages = [msg for msg in prompt_list if msg.get('role') == 'user']
+                            if user_messages:
+                                text = user_messages[-1].get('content', str(prompt_list))
+                            else:
+                                text = str(prompt_list)
                         else:
                             text = str(prompt_list)
                         batch_texts.append(text)
@@ -598,7 +615,22 @@ class FSDPSFTTrainer:
                         if prompt_idx < len(prompt_data):
                             prompt_list = prompt_data[prompt_idx]
                             if isinstance(prompt_list, list) and prompt_list:
-                                prompt_text = str(prompt_list[-1].get('content', ''))
+                                # For full conversations, format the prompt nicely
+                                if len(prompt_list) > 1:
+                                    # Extract key parts of the conversation
+                                    system_msg = next((msg for msg in prompt_list if msg.get('role') == 'system'), None)
+                                    user_msgs = [msg for msg in prompt_list if msg.get('role') == 'user']
+                                    
+                                    if system_msg and user_msgs:
+                                        system_content = system_msg.get('content', '')
+                                        # Show first 200 chars of system message
+                                        system_preview = system_content[:200] + "..." if len(system_content) > 200 else system_content
+                                        last_user_msg = user_msgs[-1].get('content', '')
+                                        prompt_text = f"SYSTEM: {system_preview}\nUSER: {last_user_msg}"
+                                    else:
+                                        prompt_text = str(prompt_list[-1].get('content', ''))
+                                else:
+                                    prompt_text = str(prompt_list[-1].get('content', ''))
                             else:
                                 prompt_text = str(prompt_list)
                             prompt_texts.append(prompt_text)
@@ -611,7 +643,22 @@ class FSDPSFTTrainer:
                         if prompt_idx < len(prompt_data):
                             prompt_list = prompt_data[prompt_idx]
                             if isinstance(prompt_list, list) and prompt_list:
-                                prompt_text = str(prompt_list[-1].get('content', ''))
+                                # For full conversations, format the prompt nicely
+                                if len(prompt_list) > 1:
+                                    # Extract key parts of the conversation
+                                    system_msg = next((msg for msg in prompt_list if msg.get('role') == 'system'), None)
+                                    user_msgs = [msg for msg in prompt_list if msg.get('role') == 'user']
+                                    
+                                    if system_msg and user_msgs:
+                                        system_content = system_msg.get('content', '')
+                                        # Show first 200 chars of system message
+                                        system_preview = system_content[:200] + "..." if len(system_content) > 200 else system_content
+                                        last_user_msg = user_msgs[-1].get('content', '')
+                                        prompt_text = f"SYSTEM: {system_preview}\nUSER: {last_user_msg}"
+                                    else:
+                                        prompt_text = str(prompt_list[-1].get('content', ''))
+                                else:
+                                    prompt_text = str(prompt_list[-1].get('content', ''))
                             else:
                                 prompt_text = str(prompt_list)
                             prompt_texts.append(prompt_text)
