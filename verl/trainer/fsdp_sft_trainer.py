@@ -457,32 +457,29 @@ class FSDPSFTTrainer:
         return loss
 
     def load_validation_prompts(self, max_prompts=None):
-        """Load prompts from validation_generation_prompts.json file"""
-        json_path = "/Users/riddhi/Developer/letta-synthetic-data/data/validation_generation_prompts.json"
+        """Load prompts from validation_generation_prompts.parquet file"""
+        parquet_path = "/Users/riddhi/Developer/letta-synthetic-data/data/validation_generation_prompts.parquet"
         
-        if not os.path.exists(json_path):
-            print(f"Warning: Validation prompts file not found at {json_path}")
+        if not os.path.exists(parquet_path):
+            print(f"Warning: Validation prompts file not found at {parquet_path}")
             return []
         
         try:
-            with open(json_path, 'r') as f:
-                # Handle JSONL format (one JSON object per line)
-                data = []
-                for line in f:
-                    line = line.strip()
-                    if line:
-                        data.append(json.loads(line))
+            import pandas as pd
+            
+            # Read parquet file
+            df = pd.read_parquet(parquet_path)
             
             prompt_data = []
             count = 0
             
-            for item in data:
+            for _, row in df.iterrows():
                 if max_prompts and count >= max_prompts:
                     break
                 
-                # Extract the messages from the JSON structure
-                messages = item.get('messages', [])
-                if messages:
+                # Extract the messages from the row
+                messages = row['messages']
+                if messages is not None and len(messages) > 0:
                     # Filter out system messages and only keep user messages
                     user_messages = [msg for msg in messages if msg.get('role') == 'user']
                     if user_messages:
@@ -491,7 +488,7 @@ class FSDPSFTTrainer:
                         prompt_data.append([{"role": "user", "content": last_user_message.get('content', '')}])
                         count += 1
             
-            print(f"Loaded {len(prompt_data)} prompts from validation_generation_prompts.json")
+            print(f"Loaded {len(prompt_data)} prompts from validation_generation_prompts.parquet")
             return prompt_data
             
         except Exception as e:
