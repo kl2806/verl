@@ -38,6 +38,7 @@ import tempfile
 import subprocess
 import pandas as pd
 from pathlib import Path
+import json
 
 import hydra
 import torch
@@ -455,7 +456,44 @@ class FSDPSFTTrainer:
             torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.AVG)
         return loss
 
-    def generate_samples(self, batch: dict, max_new_tokens=None):
+    def load_validation_prompts(self, max_prompts=None):
+        """Load prompts from validation_generation_prompts.json file"""
+        json_path = "/Users/riddhi/Developer/letta-synthetic-data/data/validation_generation_prompts.json"
+        
+        if not os.path.exists(json_path):
+            print(f"Warning: Validation prompts file not found at {json_path}")
+            return []
+        
+        try:
+            with open(json_path, 'r') as f:
+                data = json.load(f)
+            
+            prompt_data = []
+            count = 0
+            
+            for item in data:
+                if max_prompts and count >= max_prompts:
+                    break
+                
+                # Extract the messages from the JSON structure
+                messages = item.get('messages', [])
+                if messages:
+                    # Filter out system messages and only keep user messages
+                    user_messages = [msg for msg in messages if msg.get('role') == 'user']
+                    if user_messages:
+                        # Use the last user message as the prompt
+                        last_user_message = user_messages[-1]
+                        prompt_data.append([{"role": "user", "content": last_user_message.get('content', '')}])
+                        count += 1
+            
+            print(f"Loaded {len(prompt_data)} prompts from validation_generation_prompts.json")
+            return prompt_data
+            
+        except Exception as e:
+            print(f"Error loading validation prompts: {e}")
+            return []
+
+    def generate_samples(self, batch: dict = None, max_new_tokens=None, use_validation_prompts=False):
         if max_new_tokens is None:
             max_new_tokens = int(os.getenv("VERL_GENERATION_MAX_NEW_TOKENS", 200))
         
@@ -472,14 +510,17 @@ class FSDPSFTTrainer:
         top_p = float(os.getenv("VERL_GENERATION_TOP_P", 0.9))
         do_sample = temperature > 0.0
         
-        prompt_data = []
-        
-        input_ids = batch["input_ids"]
-        
-        for seq in input_ids:
-            seq = seq[seq != self.tokenizer.pad_token_id]
-            text = self.tokenizer.decode(seq, skip_special_tokens=True)
-            prompt_data.append([{"role": "user", "content": text}])
+        # Use validation prompts if requested, otherwise use batch data
+        if use_validation_prompts:
+            prompt_data = self.load_validation_prompts(max_prompts=15)
+        else:
+            prompt_data = []
+            if batch is not None:
+                input_ids = batch["input_ids"]
+                for seq in input_ids:
+                    seq = seq[seq != self.tokenizer.pad_token_id]
+                    text = self.tokenizer.decode(seq, skip_special_tokens=True)
+                    prompt_data.append([{"role": "user", "content": text}])
         
         if not prompt_data:
             return [], []
@@ -629,15 +670,10 @@ class FSDPSFTTrainer:
         initial_prompts = []
         initial_generations = []
         
-        ten = 0
-        for data in self.val_dataloader:
-            if rank == 0:
-                prompts, generations = self.generate_samples(data)
-                initial_prompts.extend(prompts)
-                initial_generations.extend(generations)
-            ten += 1
-            if ten == 10:
-                break
+        if rank == 0:
+            prompts, generations = self.generate_samples(use_validation_prompts=True)
+            initial_prompts.extend(prompts)
+            initial_generations.extend(generations)
         
         if rank == 0 and initial_prompts and initial_generations and val_generations_logger is not None and tracking is not None:
             initial_samples = []
@@ -706,54 +742,48 @@ class FSDPSFTTrainer:
             all_prompts = []
             all_generations = []
             
-            # Collect a few samples for generation (limit to avoid too much output)
-            max_samples_to_generate = int(os.getenv("VERL_MAX_VAL_SAMPLES", 
-                getattr(self.config.trainer, "max_val_samples", 10) if hasattr(self.config.trainer, "max_val_samples") else 10))
-            samples_generated = 0
-            
             for data in self.val_dataloader:
                 # data = TensorDict(data, batch_size=self.config.data.micro_batch_size_per_gpu).cuda()
                 val_loss = self.validation_step(data)
                 val_losses.append(val_loss)
-                
-                if samples_generated < max_samples_to_generate and rank == 0:
-                    try:
-                        prompts, generations = self.generate_samples(data)
-                        all_prompts.extend(prompts)
-                        all_generations.extend(generations)
-                        samples_generated += len(prompts)
-                        # script to check how many outputs parsed correctly 
-                        json_valid_count = 0
-                        total_generations = len(generations)
-                        tag_errors_count = 0
-                        for i, generation in enumerate(generations):
-                            json_valid, error_msg, parsed_json = validate_json_generation(generation)
-                            if (generation.count("<tool_call>") != generation.count("</tool_call>")):
-                                tag_errors_count += 1
-                                print(f"✗ Generation {i+1} has a mismatched number of <tool_call> tags")
-                            else: print(f"✓ Generation {i+1} has a correct number of <tool_call> tags")
-                            if (generation.count("<think>") != generation.count("</think>")): 
-                                tag_errors_count += 1
-                                print(f"✗ Generation {i+1} has a mismatched number of think tags")
-                            else: print(f"✓ Generation {i+1} has a correct number of think tags")
-                            if ("<inner_monologue>" in generation or "</inner_monologue>" in generation):
-                                tag_errors_count += 1
-                                print(f"✗ Generation {i+1} has an inner monologue")
-                            
-                            if json_valid:
-                                json_valid_count += 1
-                                print(f"✓ Generation {i+1} parses as valid JSON")
-                            else:
-                                print(f"✗ Generation {i+1} failed JSON parsing: {error_msg}")
+            
+            # Generate samples using validation prompts (only once per validation)
+            if rank == 0:
+                try:
+                    prompts, generations = self.generate_samples(use_validation_prompts=True)
+                    all_prompts.extend(prompts)
+                    all_generations.extend(generations)
+                    
+                    # script to check how many outputs parsed correctly 
+                    json_valid_count = 0
+                    total_generations = len(generations)
+                    tag_errors_count = 0
+                    for i, generation in enumerate(generations):
+                        json_valid, error_msg, parsed_json = validate_json_generation(generation)
+                        if (generation.count("<tool_call>") != generation.count("</tool_call>")):
+                            tag_errors_count += 1
+                            print(f"✗ Generation {i+1} has a mismatched number of <tool_call> tags")
+                        else: print(f"✓ Generation {i+1} has a correct number of <tool_call> tags")
+                        if (generation.count("<think>") != generation.count("</think>")): 
+                            tag_errors_count += 1
+                            print(f"✗ Generation {i+1} has a mismatched number of think tags")
+                        else: print(f"✓ Generation {i+1} has a correct number of think tags")
+                        if ("<inner_monologue>" in generation or "</inner_monologue>" in generation):
+                            tag_errors_count += 1
+                            print(f"✗ Generation {i+1} has an inner monologue")
                         
-                        # Print summary statistics
-                        json_valid_rate = (json_valid_count / total_generations * 100) if total_generations > 0 else 0
-                        print(f"JSON Validation Summary: {json_valid_count}/{total_generations} ({json_valid_rate:.1f}%) valid JSON generations")
-
+                        if json_valid:
+                            json_valid_count += 1
+                            print(f"✓ Generation {i+1} parses as valid JSON")
+                        else:
+                            print(f"✗ Generation {i+1} failed JSON parsing: {error_msg}")
+                    
+                    # Print summary statistics
+                    json_valid_rate = (json_valid_count / total_generations * 100) if total_generations > 0 else 0
+                    print(f"JSON Validation Summary: {json_valid_count}/{total_generations} ({json_valid_rate:.1f}%) valid JSON generations")
                         
-                            
-                    except Exception as e:
-                        print(f"Warning: Failed to generate samples during validation: {e}")
+                except Exception as e:
+                    print(f"Warning: Failed to generate samples during validation: {e}")
             
             if rank == 0:
                 val_loss = torch.mean(torch.stack(val_losses))
