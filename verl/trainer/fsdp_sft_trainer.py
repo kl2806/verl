@@ -466,7 +466,12 @@ class FSDPSFTTrainer:
         
         try:
             with open(json_path, 'r') as f:
-                data = json.load(f)
+                # Handle JSONL format (one JSON object per line)
+                data = []
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        data.append(json.loads(line))
             
             prompt_data = []
             count = 0
