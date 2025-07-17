@@ -447,7 +447,7 @@ class FSDPSFTTrainer:
 
         step_loss = torch.tensor(step_loss).cuda()
         torch.distributed.all_reduce(step_loss, op=torch.distributed.ReduceOp.AVG)
-        return {"train/loss": step_loss.detach().item(), "train/lr(1e-3)": lr * 1e3}
+        return {"train/loss": step_loss.detach().item(), "train/lr(1e-5)": lr * 1e5}
 
     def validation_step(self, batch: TensorDict):
         self.fsdp_model.eval()
@@ -458,7 +458,7 @@ class FSDPSFTTrainer:
 
     def load_validation_prompts(self, max_prompts=None):
         """Load prompts from validation_generation_prompts.parquet file"""
-        parquet_path = "/Users/riddhi/Developer/letta-synthetic-data/data/validation_generation_prompts.parquet"
+        parquet_path = "/home/riddhi/letta-synthetic-data/data/validation_generation_prompts.parquet"
         
         if not os.path.exists(parquet_path):
             print(f"Warning: Validation prompts file not found at {parquet_path}")
@@ -466,8 +466,6 @@ class FSDPSFTTrainer:
         
         try:
             import pandas as pd
-            
-            # Read parquet file
             df = pd.read_parquet(parquet_path)
             
             prompt_data = []
@@ -477,26 +475,21 @@ class FSDPSFTTrainer:
                 if max_prompts and count >= max_prompts:
                     break
                 
-                # Extract the messages from the row
                 messages = row['messages']
                 if messages is not None and len(messages) > 0:
-                    # Convert numpy array to list and process full conversation
                     messages_list = messages.tolist() if hasattr(messages, 'tolist') else messages
                     
-                    # Process the full conversation, adding /no_think to system prompts
                     processed_messages = []
                     for msg in messages_list:
                         if isinstance(msg, dict) and "content" in msg:
                             processed_msg = msg.copy()
                             content = msg["content"]
                             if isinstance(content, str) and content.strip().startswith("<base_instructions>"):
-                                # Add /no_think to system prompts
                                 processed_msg["content"] = content + "\n/no_think"
                             processed_messages.append(processed_msg)
                         else:
                             processed_messages.append(msg)
                     
-                    # Use the full conversation as the prompt
                     prompt_data.append(processed_messages)
                     count += 1
             
@@ -570,7 +563,6 @@ class FSDPSFTTrainer:
                     batch_texts = []
                     for prompt_list in batch_prompts:
                         if isinstance(prompt_list, list) and prompt_list:
-                            # For full conversations, get the last user message for fallback
                             user_messages = [msg for msg in prompt_list if msg.get('role') == 'user']
                             if user_messages:
                                 text = user_messages[-1].get('content', str(prompt_list))
@@ -615,7 +607,6 @@ class FSDPSFTTrainer:
                         if prompt_idx < len(prompt_data):
                             prompt_list = prompt_data[prompt_idx]
                             if isinstance(prompt_list, list) and prompt_list:
-                                # For full conversations, format the prompt nicely
                                 if len(prompt_list) > 1:
                                     # Format the entire conversation for validation generation
                                     conversation_parts = []
@@ -643,7 +634,6 @@ class FSDPSFTTrainer:
                         if prompt_idx < len(prompt_data):
                             prompt_list = prompt_data[prompt_idx]
                             if isinstance(prompt_list, list) and prompt_list:
-                                # For full conversations, format the prompt nicely
                                 if len(prompt_list) > 1:
                                     # Format the entire conversation for validation generation
                                     conversation_parts = []
@@ -720,13 +710,12 @@ class FSDPSFTTrainer:
         
         if rank == 0:
             prompts, generations = self.generate_samples(use_validation_prompts=True)
-            print(f"Prompts: {prompts}")
             initial_prompts.extend(prompts)
             initial_generations.extend(generations)
         
         if rank == 0 and initial_prompts and initial_generations and val_generations_logger is not None and tracking is not None:
             initial_samples = []
-            num_initial_samples_to_log = min(10, len(initial_prompts))
+            num_initial_samples_to_log = min(15, len(initial_prompts))
             for i in range(num_initial_samples_to_log):
                 prompt_text = initial_prompts[i]
                 generation_text = initial_generations[i]
@@ -792,7 +781,7 @@ class FSDPSFTTrainer:
             
             # Collect a few samples for generation (limit to avoid too much output)
             max_samples_to_generate = int(os.getenv("VERL_MAX_VAL_SAMPLES", 
-                getattr(self.config.trainer, "max_val_samples", 10) if hasattr(self.config.trainer, "max_val_samples") else 10))
+                getattr(self.config.trainer, "max_val_samples", 15) if hasattr(self.config.trainer, "max_val_samples") else 15))
             samples_generated = 0
             
             for data in self.val_dataloader:
@@ -811,7 +800,6 @@ class FSDPSFTTrainer:
                     tag_errors = []
                     
                     # script to check how many outputs parsed correctly 
-                    json_valid_count = 0
                     total_generations = len(generations)
                     tag_errors_count = 0
                     for i, generation in enumerate(generations):
@@ -830,14 +818,15 @@ class FSDPSFTTrainer:
                         tag_errors.append(tag_errors_count)
                         
                         if json_valid:
-                            json_valid_count += 1
+                            json_valid_count = 1
                             print(f"✓ Generation {i+1} parses as valid JSON")
                         else:
+                            json_valid_count = 0
                             print(f"✗ Generation {i+1} failed JSON parsing: {error_msg}")
                         json_rates.append(json_valid_count)
                     
                     # Print summary statistics
-                    json_valid_rate = (json_valid_count / total_generations * 100) if total_generations > 0 else 0
+                    json_valid_rate = (sum(json_rates) / total_generations * 100) if total_generations > 0 else 0
                     print(f"JSON Validation Summary: {json_valid_count}/{total_generations} ({json_valid_rate:.1f}%) valid JSON generations")
                         
                 except Exception as e:
