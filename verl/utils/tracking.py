@@ -214,13 +214,9 @@ class ValidationGenerationsLogger:
         total_tag_errors = 0
         for sample in samples:
             row_data.extend(sample)
-            if sample[2] == "N/A" and sample[3] == "N/A": 
-                total_parsed_json = 0
-                total_tag_errors = 0
-            else:
-                percentage_str = sample[2].rstrip('%')
-                total_parsed_json += float(percentage_str) / 100
-                total_tag_errors += int(sample[3])
+            percentage_str = sample[2].rstrip('%')
+            total_parsed_json += float(percentage_str) / 100
+            total_tag_errors += int(sample[3])
         row_data.extend([total_parsed_json, total_tag_errors])
         
         new_table.add_data(*row_data)

@@ -90,7 +90,7 @@ def validate_json_generation(generation_text):
             
             if line.strip() == "":
                 continue
-            if line.strip().startswith("{"):
+            if line.strip().startswith("{\"name\""):
                 to_parse = line
                 break
         
@@ -114,6 +114,68 @@ def convert_to_regular_types(obj):
     elif isinstance(obj, dict):
         return {k: convert_to_regular_types(v) for k, v in obj.items()}
     return obj
+
+
+def evaluate_generations(generations):
+    """Evaluate a list of generation strings for JSON validity and tag consistency.
+
+    The behaviour intentionally mirrors the inline logic previously
+    implemented in the validation loop so that downstream code expecting
+    identical prints / side-effects continues to function unchanged.
+
+    Parameters
+    ----------
+    generations : list[str]
+        The generated strings to validate.
+
+    Returns
+    -------
+    tuple[list[int], list[int]]
+        json_rates – 100 or 0 per sample depending on JSON validity
+        tag_errors – cumulative count of tag related errors per sample
+    """
+    json_rates: list[int] = []
+    tag_errors: list[int] = []
+ 
+    total_generations = len(generations)
+    tag_errors_count = 0
+    json_valid_count = 0 
+
+    for i, generation in enumerate(generations):
+        json_valid, error_msg, _ = validate_json_generation(generation)
+
+        if generation.count("<tool_call>") != generation.count("</tool_call>"):
+            tag_errors_count += 1
+            print(f"✗ Generation {i+1} has a mismatched number of <tool_call> tags")
+        else:
+            print(f"✓ Generation {i+1} has a correct number of <tool_call> tags")
+
+        if generation.count("<think>") != generation.count("</think>"):
+            tag_errors_count += 1
+            print(f"✗ Generation {i+1} has a mismatched number of think tags")
+        else:
+            print(f"✓ Generation {i+1} has a correct number of think tags")
+
+        if "<inner_monologue>" in generation or "</inner_monologue>" in generation:
+            tag_errors_count += 1
+            print(f"✗ Generation {i+1} has an inner monologue")
+
+        tag_errors.append(tag_errors_count)
+
+        if json_valid:
+            json_valid_count = 1
+            print(f"✓ Generation {i+1} parses as valid JSON")
+        else:
+            json_valid_count = 0
+            print(f"✗ Generation {i+1} failed JSON parsing: {error_msg}")
+        json_rates.append(json_valid_count * 100)
+
+    json_valid_rate = (sum(json_rates) / total_generations * 100) if total_generations > 0 else 0
+    print(
+        f"JSON Validation Summary: {sum(json_rates)}/{total_generations} --> ({json_valid_rate:.1f}%) valid JSON generations"
+    )
+
+    return json_rates, tag_errors
 
 
 class FSDPSFTTrainer:
@@ -608,13 +670,12 @@ class FSDPSFTTrainer:
                             prompt_list = prompt_data[prompt_idx]
                             if isinstance(prompt_list, list) and prompt_list:
                                 if len(prompt_list) > 1:
-                                    # Format the entire conversation for validation generation
                                     conversation_parts = []
                                     for msg in prompt_list:
-                                        role = msg.get('role', '').upper()
+                                        role = msg.get('role', '')
                                         content = msg.get('content', '')
                                         if role and content:
-                                            conversation_parts.append(f"{role}: {content}")
+                                            conversation_parts.append(f"{role}\n {content}")
                                     
                                     if conversation_parts:
                                         prompt_text = "\n".join(conversation_parts)
@@ -714,12 +775,16 @@ class FSDPSFTTrainer:
             initial_generations.extend(generations)
         
         if rank == 0 and initial_prompts and initial_generations and val_generations_logger is not None and tracking is not None:
+            json_rates, tag_errors = evaluate_generations(initial_generations)
+
             initial_samples = []
             num_initial_samples_to_log = min(15, len(initial_prompts))
             for i in range(num_initial_samples_to_log):
                 prompt_text = initial_prompts[i]
                 generation_text = initial_generations[i]
-                initial_samples.append([prompt_text, generation_text, "N/A", "N/A"])  # No score available
+                json_rate = json_rates[i] if i < len(json_rates) else "N/A"
+                tag_error = tag_errors[i] if i < len(tag_errors) else "N/A"
+                initial_samples.append([prompt_text, generation_text, f"{json_rate}%", f"{tag_error}"])
             val_generations_logger.log(tracking.logger.keys(), initial_samples, 0)  # Step 0 for initial samples
             
             print(f"\n=== Initial Samples (Before Training) ===")
@@ -728,7 +793,6 @@ class FSDPSFTTrainer:
                 print(f"Initial Generation {i+1}: {initial_generations[i]}")
                 print("-" * 50)
             
-            # Log initial samples without JSON metrics
             if tracking is not None:
                 tracking.log(data={"initial/samples_generated": len(initial_generations)}, step=0)
             
@@ -796,38 +860,8 @@ class FSDPSFTTrainer:
                     all_prompts.extend(prompts)
                     all_generations.extend(generations)
 
-                    json_rates = []
-                    tag_errors = []
-                    
-                    # script to check how many outputs parsed correctly 
-                    total_generations = len(generations)
-                    tag_errors_count = 0
-                    for i, generation in enumerate(generations):
-                        json_valid, error_msg, parsed_json = validate_json_generation(generation)
-                        if (generation.count("<tool_call>") != generation.count("</tool_call>")):
-                            tag_errors_count += 1
-                            print(f"✗ Generation {i+1} has a mismatched number of <tool_call> tags")
-                        else: print(f"✓ Generation {i+1} has a correct number of <tool_call> tags")
-                        if (generation.count("<think>") != generation.count("</think>")): 
-                            tag_errors_count += 1
-                            print(f"✗ Generation {i+1} has a mismatched number of think tags")
-                        else: print(f"✓ Generation {i+1} has a correct number of think tags")
-                        if ("<inner_monologue>" in generation or "</inner_monologue>" in generation):
-                            tag_errors_count += 1
-                            print(f"✗ Generation {i+1} has an inner monologue")
-                        tag_errors.append(tag_errors_count)
-                        
-                        if json_valid:
-                            json_valid_count = 1
-                            print(f"✓ Generation {i+1} parses as valid JSON")
-                        else:
-                            json_valid_count = 0
-                            print(f"✗ Generation {i+1} failed JSON parsing: {error_msg}")
-                        json_rates.append(json_valid_count)
-                    
-                    # Print summary statistics
-                    json_valid_rate = (sum(json_rates) / total_generations * 100) if total_generations > 0 else 0
-                    print(f"JSON Validation Summary: {json_valid_count}/{total_generations} ({json_valid_rate:.1f}%) valid JSON generations")
+                    # Use shared evaluation helper
+                    json_rates, tag_errors = evaluate_generations(generations)
                         
                 except Exception as e:
                     print(f"Warning: Failed to generate samples during validation: {e}")
