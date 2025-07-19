@@ -83,25 +83,28 @@ def extract_step(path):
 
 def validate_json_generation(generation_text):
     import json
-    
     try:
-        to_parse = ""
-        for line in generation_text.split("\n"):
-            
-            if line.strip() == "":
-                continue
-            if line.strip().startswith("{\"name\""):
-                to_parse = line
-                break
+        start_idx = generation_text.find("{\"name\"")
+        if start_idx == -1:
+            returnable = False, "No JSON object starting with {\"name\" found", None
+
+        end_idx = generation_text.find("}}", start_idx)
+        if end_idx == -1:
+            returnable = False, "No closing '}}' found for JSON object", None
+
+        to_parse = generation_text[start_idx:end_idx+2]
         
         parsed_json = json.loads(to_parse)
-        return True, None, parsed_json
+        returnable = True, None, parsed_json
     except json.JSONDecodeError as json_err:
-        # print(to_parse)
-        return False, f"JSON decode error: {json_err}", None
+        returnable = False, f"JSON decode error: {json_err}", None
     except Exception as parse_err:
-        return False, f"Parsing error: {parse_err}", None
-
+        returnable = False, f"Parsing error: {parse_err}", None
+    
+    if not returnable[0]:
+        with open("not_parsed.txt", "a") as f:
+            f.write(generation_text + "\n")
+    return returnable
 
 def convert_to_regular_types(obj):
     """Convert Hydra configs and other special types to regular Python types."""
@@ -579,7 +582,6 @@ class FSDPSFTTrainer:
         top_p = float(os.getenv("VERL_GENERATION_TOP_P", 0.9))
         do_sample = temperature > 0.0
         
-        # Use validation prompts if requested, otherwise use batch data
         if use_validation_prompts:
             prompt_data = self.load_validation_prompts(max_prompts=15)
         else:
@@ -662,9 +664,11 @@ class FSDPSFTTrainer:
                     
                     for j, (input_seq, generated_seq) in enumerate(zip(input_ids, generated_outputs)):
                         new_tokens = generated_seq[len(input_seq):]
+                        # Turn OFF special-token stripping just for debugging
+                        # dbg_text = self.tokenizer.decode(new_tokens, skip_special_tokens=False)
+                        # print(dbg_text)        # → "im_end" token is present if special_token skipping is OFF
                         generated_text = self.tokenizer.decode(new_tokens, skip_special_tokens=True)
                         generated_texts.append(generated_text)
-                        
                         prompt_idx = i + j
                         if prompt_idx < len(prompt_data):
                             prompt_list = prompt_data[prompt_idx]
@@ -686,6 +690,10 @@ class FSDPSFTTrainer:
                             else:
                                 prompt_text = str(prompt_list)
                             prompt_texts.append(prompt_text)
+                
+                        # print(f"Prompt text: {prompt_texts[-1]}")
+                        # print(f"Generated tokens: {new_tokens}")
+                        # print(f"Decoded generation: {generated_text}")
                 
                 except Exception as e:
                     print(f"Warning: Generation failed for batch {i}: {e}")
@@ -729,7 +737,6 @@ class FSDPSFTTrainer:
             # Single GPU case - model is not FSDP wrapped
             state_dict = self.fsdp_model.state_dict()
         else:
-            # Multi-GPU case - model is FSDP wrapped
             from torch.distributed.fsdp import FullStateDictConfig, StateDictType
             cfg = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
             with FSDP.state_dict_type(self.fsdp_model, StateDictType.FULL_STATE_DICT, cfg):
@@ -853,14 +860,12 @@ class FSDPSFTTrainer:
                 val_loss = self.validation_step(data)
                 val_losses.append(val_loss)
             
-            # Generate samples using validation prompts (only once per validation)
             if rank == 0:
                 try:
                     prompts, generations = self.generate_samples(use_validation_prompts=True)
                     all_prompts.extend(prompts)
                     all_generations.extend(generations)
 
-                    # Use shared evaluation helper
                     json_rates, tag_errors = evaluate_generations(generations)
                         
                 except Exception as e:
@@ -875,7 +880,6 @@ class FSDPSFTTrainer:
                         "val/samples_generated": len(all_generations)
                     })
                 
-                # Log sample generations if available
                 if all_prompts and all_generations:
                     print(f"\n=== Validation Samples (Step {global_step}) ===")
                     for i in range(min(2, len(all_prompts))):
@@ -928,12 +932,10 @@ def main(config):
 def create_sft_dataset(data_paths, data_config, tokenizer):
     """Create a dataset."""
     # build dataset
-    # First check if a custom dataset class is specified
     if data_config.custom_cls.get("path", None):
         from verl.utils.import_utils import load_extern_type
 
         dataset_cls = load_extern_type(data_config.custom_cls.path, data_config.custom_cls.name)
-    # Then check if multi-turn dataset should be used
     elif data_config.get("multiturn", {}).get("enable", False):
         dataset_cls = MultiTurnSFTDataset
         # ONLY USES MULTI-TURN DATASET FOR VALIDATION AS OF 07/09/25
