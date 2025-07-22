@@ -38,8 +38,7 @@ import tempfile
 import subprocess
 import pandas as pd
 from pathlib import Path
-import json
-
+from json_parser import OptimisticJSONParser
 import hydra
 import torch
 import torch.distributed
@@ -94,7 +93,7 @@ def validate_json_generation(generation_text):
 
         to_parse = generation_text[start_idx:end_idx+2]
         
-        parsed_json = json.loads(to_parse)
+        parsed_json = OptimisticJSONParser().parse(to_parse)
         returnable = True, None, parsed_json
     except json.JSONDecodeError as json_err:
         returnable = False, f"JSON decode error: {json_err}", None
@@ -141,10 +140,10 @@ def evaluate_generations(generations):
     tag_errors: list[int] = []
  
     total_generations = len(generations)
-    tag_errors_count = 0
-    json_valid_count = 0 
+    
 
     for i, generation in enumerate(generations):
+        tag_errors_count = 0
         json_valid, error_msg, _ = validate_json_generation(generation)
 
         if generation.count("<tool_call>") != generation.count("</tool_call>"):
@@ -159,6 +158,12 @@ def evaluate_generations(generations):
         else:
             print(f"✓ Generation {i+1} has a correct number of think tags")
 
+        if generation.count("{") != generation.count("}"):
+            tag_errors_count += 1
+            print("✗ Generation {i+1} has a mismatched number of '{' and '}' tags")
+        else:
+            print("✓ Generation {i+1} has a correct number of '{' and '}' tags")
+
         if "<inner_monologue>" in generation or "</inner_monologue>" in generation:
             tag_errors_count += 1
             print(f"✗ Generation {i+1} has an inner monologue")
@@ -171,6 +176,7 @@ def evaluate_generations(generations):
         else:
             json_valid_count = 0
             print(f"✗ Generation {i+1} failed JSON parsing: {error_msg}")
+            logger.warning(f"FAILED PARSING: {generation}")
         json_rates.append(json_valid_count * 100)
 
     json_valid_rate = (sum(json_rates) / total_generations * 100) if total_generations > 0 else 0
@@ -566,20 +572,19 @@ class FSDPSFTTrainer:
             return []
 
     def generate_samples(self, batch: dict = None, max_new_tokens=None, use_validation_prompts=False):
-        if max_new_tokens is None:
-            max_new_tokens = int(os.getenv("VERL_GENERATION_MAX_NEW_TOKENS", 200))
-        
         if self.device_mesh.get_rank() != 0:
             return [], []
         
-        print(f"Starting inline generation with max_new_tokens={max_new_tokens}")
+        max_length = self.model.config.max_position_embeddings
+        print(f"Starting inline generation with max_length={max_length}")
         start_time = time.time()
         
         self.fsdp_model.eval()
         
-        temperature = float(os.getenv("VERL_GENERATION_TEMPERATURE", 0.7))
-        top_k = int(os.getenv("VERL_GENERATION_TOP_K", 40))
-        top_p = float(os.getenv("VERL_GENERATION_TOP_P", 0.9))
+        temperature = float(os.getenv("VERL_GENERATION_TEMPERATURE", 0.6))
+        top_k = int(os.getenv("VERL_GENERATION_TOP_K", 20))
+        top_p = float(os.getenv("VERL_GENERATION_TOP_P", 0.95))
+        min_p = 0.0
         do_sample = temperature > 0.0
         
         if use_validation_prompts:
@@ -617,7 +622,7 @@ class FSDPSFTTrainer:
                         add_generation_prompt=True,
                         padding=True,
                         truncation=True,
-                        max_length=4096,
+                        max_length=self.model.config.max_position_embeddings,
                         return_tensors="pt",
                         return_dict=True,
                         tokenize=True,
@@ -640,7 +645,7 @@ class FSDPSFTTrainer:
                         batch_texts,
                         padding=True,
                         truncation=True,
-                        max_length=4096,
+                        max_length=self.model.config.max_position_embeddings,
                         return_tensors="pt"
                     )
                 
@@ -652,18 +657,27 @@ class FSDPSFTTrainer:
                         generated_outputs = self.fsdp_model.generate(
                             input_ids=input_ids,
                             attention_mask=attention_mask,
-                            max_new_tokens=max_new_tokens,
+                            max_length=max_length,
                             temperature=temperature if do_sample else None,
                             top_k=top_k if do_sample else None,
                             top_p=top_p if do_sample else None,
+                            min_p=min_p if do_sample else None,
                             do_sample=do_sample,
                             pad_token_id=self.tokenizer.pad_token_id,
                             eos_token_id=self.tokenizer.eos_token_id,
-                            use_cache=True
+                            use_cache=True,
                         )
                     
-                    for j, (input_seq, generated_seq) in enumerate(zip(input_ids, generated_outputs)):
-                        new_tokens = generated_seq[len(input_seq):]
+                    for j, generated_seq in enumerate(generated_outputs):
+                        input_seq = input_ids[j]
+                        
+                        prompt_len = len(input_seq)
+                        if not torch.equal(generated_seq[:prompt_len], input_seq):
+                            if prompt_len > 0 and torch.equal(generated_seq[1:prompt_len+1], input_seq):
+                                prompt_len += 1
+
+                        new_tokens = generated_seq[prompt_len:]
+
                         # Turn OFF special-token stripping just for debugging
                         # dbg_text = self.tokenizer.decode(new_tokens, skip_special_tokens=False)
                         # print(dbg_text)        # → "im_end" token is present if special_token skipping is OFF
