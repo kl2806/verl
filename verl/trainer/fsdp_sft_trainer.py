@@ -145,7 +145,7 @@ def evaluate_generations(generations):
         json_valid, error_msg, _ = validate_json_generation(generation)
         if generation.count("<tool_call>") == 0:
             tag_errors_count += 1
-            json_valid_count = False
+            json_valid = False
             print(f"✗ Generation {i+1} does not have <tool_call> tags")
         if generation.count("<tool_call>") != generation.count("</tool_call>"):
             tag_errors_count += 1
