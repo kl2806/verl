@@ -767,6 +767,10 @@ class FSDPSFTTrainer:
         torch.distributed.barrier()
 
     def fit(self):
+        import json
+        gold_responses_path = "gold_responses.json"
+        with open(gold_responses_path, "r") as f:
+            gold_responses_dict = json.load(f)
         print("=== FIT METHOD STARTED ===")
         rank = self.device_mesh.get_rank()
         print(f"Current rank: {rank}")
@@ -786,44 +790,46 @@ class FSDPSFTTrainer:
             from verl.utils.tracking import ValidationGenerationsLogger
             val_generations_logger = ValidationGenerationsLogger()
         
-        # print("Generating initial samples before training starts...")
-        # initial_prompts = []
-        # initial_generations = []
+        print("Generating initial samples before training starts...")
+        initial_prompts = []
+        initial_generations = []
         
-        # if rank == 0:
-        #     prompts, generations = self.generate_samples(use_validation_prompts=True)
-        #     initial_prompts.extend(prompts)
-        #     initial_generations.extend(generations)
+        if rank == 0:
+            prompts, generations = self.generate_samples(use_validation_prompts=True)
+            initial_prompts.extend(prompts)
+            initial_generations.extend(generations)
         
-        # if rank == 0 and initial_prompts and initial_generations and val_generations_logger is not None and tracking is not None:
-        #     json_rates, tag_errors = evaluate_generations(initial_generations)
-
-        #     initial_samples = []
-        #     num_initial_samples_to_log = min(15, len(initial_prompts))
-        #     for i in range(num_initial_samples_to_log):
-        #         prompt_text = initial_prompts[i]
-        #         generation_text = initial_generations[i]
-        #         json_rate = json_rates[i] if i < len(json_rates) else "N/A"
-        #         tag_error = tag_errors[i] if i < len(tag_errors) else "N/A"
-        #         initial_samples.append([prompt_text, generation_text, f"{json_rate}%", f"{tag_error}"])
-        #     val_generations_logger.log(tracking.logger.keys(), initial_samples, 0)  # Step 0 for initial samples
+        if rank == 0 and initial_prompts and initial_generations and val_generations_logger is not None and tracking is not None:
+            json_rates, tag_errors = evaluate_generations(initial_generations)
             
-        #     print(f"\n=== Initial Samples (Before Training) ===")
-        #     for i in range(min(2, len(initial_prompts))):
-        #         print(f"Initial Prompt {i+1}: {initial_prompts[i]}")
-        #         print(f"Initial Generation {i+1}: {initial_generations[i]}")
-        #         print("-" * 50)
+            gold_responses = [entry["gold_response"] for entry in gold_responses_dict]
+            initial_samples = []
+            num_initial_samples_to_log = min(15, len(initial_prompts))
+            for i in range(num_initial_samples_to_log):
+                prompt_text = initial_prompts[i]
+                generation_text = initial_generations[i]
+                json_rate = json_rates[i] if i < len(json_rates) else "N/A"
+                tag_error = tag_errors[i] if i < len(tag_errors) else "N/A"
+                gold_response = gold_responses[i] if i < len(gold_responses) else "N/A"
+                initial_samples.append([prompt_text, generation_text, gold_response, f"{json_rate}%", f"{tag_error}"])
+            val_generations_logger.log(tracking.logger.keys(), initial_samples, 0)  # Step 0 for initial samples
             
-        #     if tracking is not None:
-        #         tracking.log(data={"initial/samples_generated": len(initial_generations)}, step=0)
+            print(f"\n=== Initial Samples (Before Training) ===")
+            for i in range(min(2, len(initial_prompts))):
+                print(f"Initial Prompt {i+1}: {initial_prompts[i]}")
+                print(f"Initial Generation {i+1}: {initial_generations[i]}")
+                print("-" * 50)
             
-        #     # Log sample examples as text to wandb
-        #     for i, (prompt, generation) in enumerate(zip(initial_prompts[:3], initial_generations[:3])):
-        #         if tracking is not None:
-        #             tracking.log(data={
-        #                 f"initial/prompt_{i+1}": prompt,
-        #                 f"initial/generation_{i+1}": generation
-        #             }, step=0)
+            if tracking is not None:
+                tracking.log(data={"initial/samples_generated": len(initial_generations)}, step=0)
+            
+            # Log sample examples as text to wandb
+            for i, (prompt, generation) in enumerate(zip(initial_prompts[:3], initial_generations[:3])):
+                if tracking is not None:
+                    tracking.log(data={
+                        f"initial/prompt_{i+1}": prompt,
+                        f"initial/generation_{i+1}": generation
+                    }, step=0)
         
         torch.distributed.barrier()
 
@@ -901,17 +907,11 @@ class FSDPSFTTrainer:
                         print(f"Generation {i+1}: {all_generations[i]}")
                         print("-" * 50)
                     
-                    # for i, (prompt, generation) in enumerate(zip(all_prompts[:3], all_generations[:3])):
-                    #     if tracking is not None:
-                    #         tracking.log(data={
-                    #             f"val/prompt_{i+1}": prompt,
-                    #             f"val/generation_{i+1}": generation
-                    #         }, step=global_step)
-                
+                    gold_responses = [entry["gold_response"] for entry in gold_responses_dict]
                 
                     val_samples = []
-                    for prompt, generation, json_rate, tag_error in zip(all_prompts, all_generations, json_rates, tag_errors):
-                        val_samples.append([prompt, generation,  f"{json_rate}%", f"{tag_error}"])
+                    for prompt, generation, gold_response, json_rate, tag_error in zip(all_prompts, all_generations, gold_responses, json_rates, tag_errors):
+                        val_samples.append([prompt, generation, gold_response, f"{json_rate}%", f"{tag_error}"])
                     if val_generations_logger is not None and tracking is not None:
                         val_generations_logger.log(tracking.logger.keys(), val_samples, global_step)
                 
