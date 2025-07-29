@@ -85,32 +85,35 @@ class MultiTurnSFTDataset(Dataset):
         messages = self.messages[item]
 
         # First, get the full conversation tokens
-        full_tokens = tokenizer.apply_chat_template(messages, tokenize=True, return_tensors="pt", add_generation_prompt=False)
+        full_tokens = tokenizer.apply_chat_template(messages, tokenize=True, return_tensors="pt", add_generation_prompt=False, skip_special_tokens=False)
         input_ids = full_tokens[0]  # The output is already a tensor
         attention_mask = torch.ones_like(input_ids)
 
-        # Create loss mask by identifying assistant responses
+        # Create loss mask by finding assistant response positions in the full tokenized sequence
         loss_mask = torch.zeros_like(input_ids, dtype=torch.long)
-        # Process each message to find assistant responses
+        
+        # Find assistant responses by comparing tokenized prefixes
         for i, msg in enumerate(messages):
-            # Get tokens for messages up to this point to find the start position
-            prefix_messages = messages[: i + 1]
-            prefix_tokens = tokenizer.apply_chat_template(prefix_messages, tokenize=True, return_tensors="pt", add_generation_prompt=False)
-
-            # Get tokens for messages up to previous point
-            prev_tokens = tokenizer.apply_chat_template(messages[:i], tokenize=True, return_tensors="pt", add_generation_prompt=False) if i > 0 else None
-
-            # Calculate start and end positions
-            start_pos = prev_tokens[0].shape[0] if prev_tokens is not None else 0
-            end_pos = prefix_tokens[0].shape[0]
-
-            # If this is an assistant message, set loss mask
             if msg["role"] == "assistant" and self.loss_mask[item][i]:
-                loss_mask[start_pos:end_pos] = 1
+                prefix_messages = messages[:i+1]
+                prefix_tokens = tokenizer.apply_chat_template(prefix_messages, tokenize=True, return_tensors="pt", add_generation_prompt=False, skip_special_tokens=False)[0]
+                
+                if i > 0:
+                    prev_messages = messages[:i]
+                    prev_tokens = tokenizer.apply_chat_template(prev_messages, tokenize=True, return_tensors="pt", add_generation_prompt=False, skip_special_tokens=False)[0]
+                    start_pos = len(prev_tokens)
+                else:
+                    start_pos = 0
+                
+                end_pos = len(prefix_tokens)
+                
+                end_pos = min(end_pos, len(input_ids))
+                if start_pos < len(input_ids):
+                    loss_mask[start_pos:end_pos] = 1
 
         # Handle sequence length
         sequence_length = input_ids.shape[0]
-        if sequence_length < self.max_length:
+        if sequence_length <= self.max_length:
             # Pad sequences
             pad_token_id = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else 0
             padded_input_ids = torch.ones(size=(self.max_length - sequence_length,), dtype=input_ids.dtype) * pad_token_id
@@ -145,11 +148,11 @@ class MultiTurnSFTDataset(Dataset):
                 
                 if first_system_idx is not None and first_user_idx is not None:
                     keep_messages = messages[:first_user_idx]
-                    keep_tokens = tokenizer.apply_chat_template(keep_messages, tokenize=True, return_tensors="pt", add_generation_prompt=False)
+                    keep_tokens = tokenizer.apply_chat_template(keep_messages, tokenize=True, return_tensors="pt", add_generation_prompt=False, skip_special_tokens=False)
                     keep_end = keep_tokens[0].shape[0]
                 elif first_user_idx is not None:
                     keep_messages = messages[:first_user_idx + 1]
-                    keep_tokens = tokenizer.apply_chat_template(keep_messages, tokenize=True, return_tensors="pt", add_generation_prompt=False)
+                    keep_tokens = tokenizer.apply_chat_template(keep_messages, tokenize=True, return_tensors="pt", add_generation_prompt=False, skip_special_tokens=False)
                     keep_end = keep_tokens[0].shape[0]
                 else:
                     input_ids = input_ids[:self.max_length]
@@ -172,7 +175,7 @@ class MultiTurnSFTDataset(Dataset):
                         end_tokens = input_ids[-remaining_length:]
                         end_attention = attention_mask[-remaining_length:]
                         end_loss_mask = loss_mask[-remaining_length:]
-                        
+
                         input_ids = torch.cat([input_ids[:keep_end], end_tokens])
                         attention_mask = torch.cat([attention_mask[:keep_end], end_attention])
                         loss_mask = torch.cat([loss_mask[:keep_end], end_loss_mask])
@@ -190,7 +193,42 @@ class MultiTurnSFTDataset(Dataset):
         position_ids = torch.arange(len(input_ids), dtype=torch.long)
         # Zero out position IDs for padding
         position_ids = position_ids * attention_mask
-        
+
+        import json
+
+        # Prepare the dictionary to be saved
+        to_save = {
+            "input_ids": input_ids.tolist() if hasattr(input_ids, "tolist") else input_ids,
+            "attention_mask": attention_mask.tolist() if hasattr(attention_mask, "tolist") else attention_mask,
+            "position_ids": position_ids.tolist() if hasattr(position_ids, "tolist") else position_ids,
+            "loss_mask": loss_mask.tolist() if hasattr(loss_mask, "tolist") else loss_mask,
+            "FULL_decoded_text": self.tokenizer.decode(input_ids)
+        }
+        try:
+            with open("losses_and_inputs.txt", "w") as f:
+                json.dump(to_save, f)
+                f.write("\n")
+                # Add a line with the decoded input_ids for sections where loss_mask == 1
+                if hasattr(loss_mask, "tolist"):
+                    loss_mask_list = loss_mask.tolist()
+                else:
+                    loss_mask_list = loss_mask
+                if hasattr(input_ids, "tolist"):
+                    input_ids_list = input_ids.tolist()
+                else:
+                    input_ids_list = input_ids
+                indices = [i for i, v in enumerate(loss_mask_list) if v == 1]
+                # Get the corresponding input_ids
+                input_ids_with_loss = [input_ids_list[i] for i in indices]
+                # Decode using the tokenizer if available
+                decoded_text = ""
+                if hasattr(self, "tokenizer") and hasattr(self.tokenizer, "decode"):
+                    decoded_text = self.tokenizer.decode(input_ids_with_loss)
+                else:
+                    decoded_text = str(input_ids_with_loss)
+                f.write("TEXT: " + decoded_text + "\n")
+        except Exception as e:
+            print(f"Failed to save losses_and_inputs.txt: {e}")
         return {
             "input_ids": input_ids,
             "attention_mask": attention_mask,

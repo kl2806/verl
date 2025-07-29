@@ -92,13 +92,11 @@ def validate_json_generation(generation_text):
             returnable = False, "No closing '}}' found for JSON object", None
 
         to_parse = generation_text[start_idx:end_idx+2]
-        
-        parsed_json = OptimisticJSONParser().parse(to_parse)
+        escaped_json = json.dumps(to_parse, ensure_ascii=False)
+        parsed_json = OptimisticJSONParser().parse(escaped_json)
         returnable = True, None, parsed_json
-    except json.JSONDecodeError as json_err:
-        returnable = False, f"JSON decode error: {json_err}", None
-    except Exception as parse_err:
-        returnable = False, f"Parsing error: {parse_err}", None
+    except Exception as e:
+        returnable = False, f"JSON decoding/parsing error: {e}", None
     
     if not returnable[0]:
         with open("not_parsed.txt", "a") as f:
@@ -145,7 +143,10 @@ def evaluate_generations(generations):
     for i, generation in enumerate(generations):
         tag_errors_count = 0
         json_valid, error_msg, _ = validate_json_generation(generation)
-
+        if generation.count("<tool_call>") == 0:
+            tag_errors_count += 1
+            json_valid_count = False
+            print(f"✗ Generation {i+1} does not have <tool_call> tags")
         if generation.count("<tool_call>") != generation.count("</tool_call>"):
             tag_errors_count += 1
             print(f"✗ Generation {i+1} has a mismatched number of <tool_call> tags")
@@ -551,12 +552,27 @@ class FSDPSFTTrainer:
                     messages_list = messages.tolist() if hasattr(messages, 'tolist') else messages
                     
                     processed_messages = []
+                    has_thinking_content = False
+                    for msg in messages_list:
+                        if isinstance(msg, dict) and "content" in msg:
+                            content = msg["content"]
+                            if isinstance(content, str) and "<think>" in content and "</think>" in content:
+                                think_start = content.find("<think>")
+                                think_end = content.find("</think>")
+                                if think_start != -1 and think_end != -1:
+                                    think_content = content[think_start + 7:think_end].strip()
+                                    if think_content:
+                                        has_thinking_content = True
+                                        break
+                    
                     for msg in messages_list:
                         if isinstance(msg, dict) and "content" in msg:
                             processed_msg = msg.copy()
                             content = msg["content"]
                             if isinstance(content, str) and content.strip().startswith("<base_instructions>"):
-                                processed_msg["content"] = content + "\n/no_think"
+                                # Only add /no_think if there's no thinking content
+                                if not has_thinking_content:
+                                    processed_msg["content"] = content + "\n/no_think"
                             processed_messages.append(processed_msg)
                         else:
                             processed_messages.append(msg)
@@ -589,14 +605,6 @@ class FSDPSFTTrainer:
         
         if use_validation_prompts:
             prompt_data = self.load_validation_prompts(max_prompts=15)
-        else:
-            prompt_data = []
-            if batch is not None:
-                input_ids = batch["input_ids"]
-                for seq in input_ids:
-                    seq = seq[seq != self.tokenizer.pad_token_id]
-                    text = self.tokenizer.decode(seq, skip_special_tokens=True)
-                    prompt_data.append([{"role": "user", "content": text}])
         
         if not prompt_data:
             return [], []
@@ -616,38 +624,40 @@ class FSDPSFTTrainer:
             for i in range(0, len(prompt_data), batch_size):
                 batch_prompts = prompt_data[i:i+batch_size]
                 
-                try:
-                    inputs = self.tokenizer.apply_chat_template(
-                        batch_prompts,
-                        add_generation_prompt=True,
-                        padding=True,
-                        truncation=True,
-                        max_length=self.model.config.max_position_embeddings,
-                        return_tensors="pt",
-                        return_dict=True,
-                        tokenize=True,
-                    )
-                except Exception as e:
-                    print(f"Warning: Chat template failed for batch {i}: {e}")
-                    batch_texts = []
-                    for prompt_list in batch_prompts:
-                        if isinstance(prompt_list, list) and prompt_list:
-                            user_messages = [msg for msg in prompt_list if msg.get('role') == 'user']
-                            if user_messages:
-                                text = user_messages[-1].get('content', str(prompt_list))
-                            else:
-                                text = str(prompt_list)
-                        else:
-                            text = str(prompt_list)
-                        batch_texts.append(text)
+                # try:
+                inputs = self.tokenizer.apply_chat_template(
+                    batch_prompts,
+                    add_generation_prompt=True,
+                    padding=True,
+                    truncation=True,
+                    max_length=self.model.config.max_position_embeddings,
+                    return_tensors="pt",
+                    return_dict=True,
+                    tokenize=True,
+                    skip_special_tokens=False,
+                )
+                # print(f"Inputs: {self.tokenizer.decode(inputs['input_ids'][0], skip_special_tokens=False)}")
+                # except Exception as e:
+                #     print(f"Warning: Chat template failed for batch {i}: {e}")
+                #     batch_texts = []
+                #     for prompt_list in batch_prompts:
+                #         if isinstance(prompt_list, list) and prompt_list:
+                #             user_messages = [msg for msg in prompt_list if msg.get('role') == 'user']
+                #             if user_messages:
+                #                 text = user_messages[-1].get('content', str(prompt_list))
+                #             else:
+                #                 text = str(prompt_list)
+                #         else:
+                #             text = str(prompt_list)
+                #         batch_texts.append(text)
                     
-                    inputs = self.tokenizer(
-                        batch_texts,
-                        padding=True,
-                        truncation=True,
-                        max_length=self.model.config.max_position_embeddings,
-                        return_tensors="pt"
-                    )
+                #     inputs = self.tokenizer(
+                #         batch_texts,
+                #         padding=True,
+                #         truncation=True,
+                #         max_length=self.model.config.max_position_embeddings,
+                #         return_tensors="pt"
+                #     )
                 
                 input_ids = inputs["input_ids"].cuda()
                 attention_mask = inputs["attention_mask"].cuda()
@@ -678,63 +688,53 @@ class FSDPSFTTrainer:
 
                         new_tokens = generated_seq[prompt_len:]
 
-                        # Turn OFF special-token stripping just for debugging
-                        # dbg_text = self.tokenizer.decode(new_tokens, skip_special_tokens=False)
-                        # print(dbg_text)        # → "im_end" token is present if special_token skipping is OFF
-                        generated_text = self.tokenizer.decode(new_tokens, skip_special_tokens=True)
+                        generated_text = self.tokenizer.decode(new_tokens, skip_special_tokens=False)
+                        
+                        if '<tool_calls>' in generated_text:
+                            print(f"❌ FOUND PLURAL: <tool_calls> - fixing to singular")
+                            generated_text = generated_text.replace('<tool_calls>', '<tool_call>')
+                            generated_text = generated_text.replace('</tool_calls>', '</tool_call>')
+                        
                         generated_texts.append(generated_text)
-                        prompt_idx = i + j
-                        if prompt_idx < len(prompt_data):
-                            prompt_list = prompt_data[prompt_idx]
-                            if isinstance(prompt_list, list) and prompt_list:
-                                if len(prompt_list) > 1:
-                                    conversation_parts = []
-                                    for msg in prompt_list:
-                                        role = msg.get('role', '')
-                                        content = msg.get('content', '')
-                                        if role and content:
-                                            conversation_parts.append(f"{role}\n {content}")
-                                    
-                                    if conversation_parts:
-                                        prompt_text = "\n".join(conversation_parts)
-                                    else:
-                                        prompt_text = str(prompt_list[-1].get('content', ''))
-                                else:
-                                    prompt_text = str(prompt_list[-1].get('content', ''))
-                            else:
-                                prompt_text = str(prompt_list)
-                            prompt_texts.append(prompt_text)
+                        prompt_text = self.tokenizer.decode(input_seq, skip_special_tokens=False)
+                        prompt_texts.append(prompt_text)
+                        
+                except Exception as e:
+                    print(f"Warning: Generation failed for batch {i}: {e}")
+                    for j in range(len(batch_prompts)):
+                        generated_texts.append(f"[Generation Error: {str(e)}]")
+                        prompt_texts.append(f"[Prompt Error: {str(e)}]")
                 
                         # print(f"Prompt text: {prompt_texts[-1]}")
                         # print(f"Generated tokens: {new_tokens}")
                         # print(f"Decoded generation: {generated_text}")
                 
-                except Exception as e:
-                    print(f"Warning: Generation failed for batch {i}: {e}")
-                    for j in range(len(batch_prompts)):
-                        generated_texts.append(f"[Generation Error: {str(e)}]")
-                        prompt_idx = i + j
-                        if prompt_idx < len(prompt_data):
-                            prompt_list = prompt_data[prompt_idx]
-                            if isinstance(prompt_list, list) and prompt_list:
-                                if len(prompt_list) > 1:
-                                    # Format the entire conversation for validation generation
-                                    conversation_parts = []
-                                    for msg in prompt_list:
-                                        role = msg.get('role', '').upper()
-                                        content = msg.get('content', '')
-                                        if role and content:
-                                            conversation_parts.append(f"{role}: {content}")
+                # except Exception as e:
+                #     print(f"Warning: Generation failed for batch {i}: {e}")
+                #     for j in range(len(batch_prompts)):
+                #         generated_texts.append(f"[Generation Error: {str(e)}]")
+                #         prompt_idx = i + j
+                #         if prompt_idx < len(prompt_data):
+                #             prompt_list = prompt_data[prompt_idx]
+                #             if isinstance(prompt_list, list) and prompt_list:
+                #                 if len(prompt_list) > 1:
+                #                     # Format the entire conversation for validation generation
+                #                     conversation_parts = []
+                #                     for msg in prompt_list:
+                #                         role = msg.get('role', '').upper()
+                #                         content = msg.get('content', '')
+                #                         if role and content:
+                #                             conversation_parts.append(f"{role}: {content}")
                                     
-                                    if conversation_parts:
-                                        prompt_text = "\n".join(conversation_parts)
-                                    else:
-                                        prompt_text = str(prompt_list[-1].get('content', ''))
-                                else:
-                                    prompt_text = str(prompt_list[-1].get('content', ''))
-                            else:
-                                prompt_text = str(prompt_list)
-                            prompt_texts.append(prompt_text)
+                #                     if conversation_parts:
+                #                         prompt_text = "\n".join(conversation_parts)
+                #                     else:
+                #                         prompt_text = str(prompt_list[-1].get('content', ''))
+                #                 else:
+                #                     prompt_text = str(prompt_list[-1].get('content', ''))
+                #             else:
+                #                 prompt_text = str(prompt_list)
+                #             prompt_texts.append(prompt_text)
         
         self.tokenizer.padding_side = original_padding_side
         
@@ -786,44 +786,44 @@ class FSDPSFTTrainer:
             from verl.utils.tracking import ValidationGenerationsLogger
             val_generations_logger = ValidationGenerationsLogger()
         
-        print("Generating initial samples before training starts...")
-        initial_prompts = []
-        initial_generations = []
+        # print("Generating initial samples before training starts...")
+        # initial_prompts = []
+        # initial_generations = []
         
-        if rank == 0:
-            prompts, generations = self.generate_samples(use_validation_prompts=True)
-            initial_prompts.extend(prompts)
-            initial_generations.extend(generations)
+        # if rank == 0:
+        #     prompts, generations = self.generate_samples(use_validation_prompts=True)
+        #     initial_prompts.extend(prompts)
+        #     initial_generations.extend(generations)
         
-        if rank == 0 and initial_prompts and initial_generations and val_generations_logger is not None and tracking is not None:
-            json_rates, tag_errors = evaluate_generations(initial_generations)
+        # if rank == 0 and initial_prompts and initial_generations and val_generations_logger is not None and tracking is not None:
+        #     json_rates, tag_errors = evaluate_generations(initial_generations)
 
-            initial_samples = []
-            num_initial_samples_to_log = min(15, len(initial_prompts))
-            for i in range(num_initial_samples_to_log):
-                prompt_text = initial_prompts[i]
-                generation_text = initial_generations[i]
-                json_rate = json_rates[i] if i < len(json_rates) else "N/A"
-                tag_error = tag_errors[i] if i < len(tag_errors) else "N/A"
-                initial_samples.append([prompt_text, generation_text, f"{json_rate}%", f"{tag_error}"])
-            val_generations_logger.log(tracking.logger.keys(), initial_samples, 0)  # Step 0 for initial samples
+        #     initial_samples = []
+        #     num_initial_samples_to_log = min(15, len(initial_prompts))
+        #     for i in range(num_initial_samples_to_log):
+        #         prompt_text = initial_prompts[i]
+        #         generation_text = initial_generations[i]
+        #         json_rate = json_rates[i] if i < len(json_rates) else "N/A"
+        #         tag_error = tag_errors[i] if i < len(tag_errors) else "N/A"
+        #         initial_samples.append([prompt_text, generation_text, f"{json_rate}%", f"{tag_error}"])
+        #     val_generations_logger.log(tracking.logger.keys(), initial_samples, 0)  # Step 0 for initial samples
             
-            print(f"\n=== Initial Samples (Before Training) ===")
-            for i in range(min(2, len(initial_prompts))):
-                print(f"Initial Prompt {i+1}: {initial_prompts[i]}")
-                print(f"Initial Generation {i+1}: {initial_generations[i]}")
-                print("-" * 50)
+        #     print(f"\n=== Initial Samples (Before Training) ===")
+        #     for i in range(min(2, len(initial_prompts))):
+        #         print(f"Initial Prompt {i+1}: {initial_prompts[i]}")
+        #         print(f"Initial Generation {i+1}: {initial_generations[i]}")
+        #         print("-" * 50)
             
-            if tracking is not None:
-                tracking.log(data={"initial/samples_generated": len(initial_generations)}, step=0)
+        #     if tracking is not None:
+        #         tracking.log(data={"initial/samples_generated": len(initial_generations)}, step=0)
             
-            # Log sample examples as text to wandb
-            for i, (prompt, generation) in enumerate(zip(initial_prompts[:3], initial_generations[:3])):
-                if tracking is not None:
-                    tracking.log(data={
-                        f"initial/prompt_{i+1}": prompt,
-                        f"initial/generation_{i+1}": generation
-                    }, step=0)
+        #     # Log sample examples as text to wandb
+        #     for i, (prompt, generation) in enumerate(zip(initial_prompts[:3], initial_generations[:3])):
+        #         if tracking is not None:
+        #             tracking.log(data={
+        #                 f"initial/prompt_{i+1}": prompt,
+        #                 f"initial/generation_{i+1}": generation
+        #             }, step=0)
         
         torch.distributed.barrier()
 
@@ -901,13 +901,12 @@ class FSDPSFTTrainer:
                         print(f"Generation {i+1}: {all_generations[i]}")
                         print("-" * 50)
                     
-                    # Log sample examples as text to wandb
-                    for i, (prompt, generation) in enumerate(zip(all_prompts[:3], all_generations[:3])):
-                        if tracking is not None:
-                            tracking.log(data={
-                                f"val/prompt_{i+1}": prompt,
-                                f"val/generation_{i+1}": generation
-                            }, step=global_step)
+                    # for i, (prompt, generation) in enumerate(zip(all_prompts[:3], all_generations[:3])):
+                    #     if tracking is not None:
+                    #         tracking.log(data={
+                    #             f"val/prompt_{i+1}": prompt,
+                    #             f"val/generation_{i+1}": generation
+                    #         }, step=global_step)
                 
                 
                     val_samples = []
@@ -938,6 +937,7 @@ def main(config):
     tokenizer = hf_tokenizer(local_model_path, trust_remote_code=config.model.trust_remote_code)
     train_dataset = create_sft_dataset(config.data.train_files, config.data, tokenizer)
     val_dataset = create_sft_dataset(config.data.val_files, config.data, tokenizer)
+    import pdb; pdb.set_trace()
 
     trainer = FSDPSFTTrainer(config=config, device_mesh=device_mesh, ulysses_device_mesh=ulysses_device_mesh, tokenizer=tokenizer, train_dataset=train_dataset, val_dataset=val_dataset)
     trainer.fit()
