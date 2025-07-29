@@ -84,32 +84,40 @@ class MultiTurnSFTDataset(Dataset):
         tokenizer = self.tokenizer
         messages = self.messages[item]
 
-        # First, get the full conversation tokens
+        # # First, get the full conversation tokens
         full_tokens = tokenizer.apply_chat_template(messages, tokenize=True, return_tensors="pt", add_generation_prompt=False, skip_special_tokens=False)
         input_ids = full_tokens[0]  # The output is already a tensor
         attention_mask = torch.ones_like(input_ids)
-
-        # Create loss mask by finding assistant response positions in the full tokenized sequence
         loss_mask = torch.zeros_like(input_ids, dtype=torch.long)
+        current_pos = 0
+        def subseq_position_helper(full_sequence, subsequence):
+            full_len = len(full_sequence)
+            sub_len = len(subsequence)
+            
+            for i in range(full_len - sub_len + 1):
+                if torch.equal(full_sequence[i:i + sub_len], subsequence):
+                    return i
+            return -1
         
-        # Find assistant responses by comparing tokenized prefixes
         for i, msg in enumerate(messages):
             if msg["role"] == "assistant" and self.loss_mask[item][i]:
-                prefix_messages = messages[:i+1]
-                prefix_tokens = tokenizer.apply_chat_template(prefix_messages, tokenize=True, return_tensors="pt", add_generation_prompt=False, skip_special_tokens=False)[0]
+                single_msg_formatted = tokenizer.apply_chat_template([msg], tokenize=True, return_tensors="pt", add_generation_prompt=False, skip_special_tokens=False)[0]
                 
-                if i > 0:
-                    prev_messages = messages[:i]
-                    prev_tokens = tokenizer.apply_chat_template(prev_messages, tokenize=True, return_tensors="pt", add_generation_prompt=False, skip_special_tokens=False)[0]
-                    start_pos = len(prev_tokens)
+                found_pos = subseq_position_helper(input_ids[current_pos:], single_msg_formatted)
+                
+                if found_pos != -1:
+                    actual_start = current_pos + found_pos
+                    actual_end = actual_start + len(single_msg_formatted)
+                    loss_mask[actual_start:actual_end] = 1
+                    current_pos = actual_end
                 else:
-                    start_pos = 0
-                
-                end_pos = len(prefix_tokens)
-                
-                end_pos = min(end_pos, len(input_ids))
-                if start_pos < len(input_ids):
-                    loss_mask[start_pos:end_pos] = 1
+                    if i + 1 < len(messages):
+                        next_msg = [messages[i + 1]]
+                        next_tokens = tokenizer.apply_chat_template(next_msg, tokenize=True, return_tensors="pt", add_generation_prompt=False, skip_special_tokens=False)[0]
+                        next_pos = subseq_position_helper(input_ids[current_pos:], next_tokens)
+                        if next_pos != -1:
+                            current_pos = current_pos + next_pos
+        
 
         # Handle sequence length
         sequence_length = input_ids.shape[0]
@@ -196,39 +204,38 @@ class MultiTurnSFTDataset(Dataset):
 
         import json
 
-        # Prepare the dictionary to be saved
-        to_save = {
-            "input_ids": input_ids.tolist() if hasattr(input_ids, "tolist") else input_ids,
-            "attention_mask": attention_mask.tolist() if hasattr(attention_mask, "tolist") else attention_mask,
-            "position_ids": position_ids.tolist() if hasattr(position_ids, "tolist") else position_ids,
-            "loss_mask": loss_mask.tolist() if hasattr(loss_mask, "tolist") else loss_mask,
-            "FULL_decoded_text": self.tokenizer.decode(input_ids)
-        }
-        try:
-            with open("losses_and_inputs.txt", "w") as f:
-                json.dump(to_save, f)
-                f.write("\n")
-                # Add a line with the decoded input_ids for sections where loss_mask == 1
-                if hasattr(loss_mask, "tolist"):
-                    loss_mask_list = loss_mask.tolist()
-                else:
-                    loss_mask_list = loss_mask
-                if hasattr(input_ids, "tolist"):
-                    input_ids_list = input_ids.tolist()
-                else:
-                    input_ids_list = input_ids
-                indices = [i for i, v in enumerate(loss_mask_list) if v == 1]
-                # Get the corresponding input_ids
-                input_ids_with_loss = [input_ids_list[i] for i in indices]
-                # Decode using the tokenizer if available
-                decoded_text = ""
-                if hasattr(self, "tokenizer") and hasattr(self.tokenizer, "decode"):
-                    decoded_text = self.tokenizer.decode(input_ids_with_loss)
-                else:
-                    decoded_text = str(input_ids_with_loss)
-                f.write("TEXT: " + decoded_text + "\n")
-        except Exception as e:
-            print(f"Failed to save losses_and_inputs.txt: {e}")
+        # to_save = {
+        #     "input_ids": input_ids.tolist() if hasattr(input_ids, "tolist") else input_ids,
+        #     "attention_mask": attention_mask.tolist() if hasattr(attention_mask, "tolist") else attention_mask,
+        #     "position_ids": position_ids.tolist() if hasattr(position_ids, "tolist") else position_ids,
+        #     "loss_mask": loss_mask.tolist() if hasattr(loss_mask, "tolist") else loss_mask,
+        #     "FULL_decoded_text": self.tokenizer.decode(input_ids)
+        # }
+        # try:
+        #     with open("losses_and_inputs.txt", "w") as f:
+        #         json.dump(to_save, f)
+        #         f.write("\n")
+        #         # Add a line with the decoded input_ids for sections where loss_mask == 1
+        #         if hasattr(loss_mask, "tolist"):
+        #             loss_mask_list = loss_mask.tolist()
+        #         else:
+        #             loss_mask_list = loss_mask
+        #         if hasattr(input_ids, "tolist"):
+        #             input_ids_list = input_ids.tolist()
+        #         else:
+        #             input_ids_list = input_ids
+        #         indices = [i for i, v in enumerate(loss_mask_list) if v == 1]
+        #         # Get the corresponding input_ids
+        #         input_ids_with_loss = [input_ids_list[i] for i in indices]
+        #         # Decode using the tokenizer if available
+        #         decoded_text = ""
+        #         if hasattr(self, "tokenizer") and hasattr(self.tokenizer, "decode"):
+        #             decoded_text = self.tokenizer.decode(input_ids_with_loss)
+        #         else:
+        #             decoded_text = str(input_ids_with_loss)
+        #         f.write("TEXT: " + decoded_text + "\n")
+        # except Exception as e:
+        #     print(f"Failed to save losses_and_inputs.txt: {e}")
         return {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
