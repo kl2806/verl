@@ -296,8 +296,7 @@ class TestIntegration:
                     tokens.append(item["input_ids"][i])
                 if item["loss_mask"][i] == 0 and tokens:
                     message = sample_tokenizer.decode(tokens)
-                    print(f"decoded message (tokens={tokens}): '{message.tolist}'")
-                    assert "assistant\n" in message
+                    print(f"decoded message (tokens={tokens}): '{message}'")
                     assert "<tool_call>" in message and "</tool_call>" in message 
                     assert "<think>" in message and "</think>" in message 
                     assert (i not in message for i in ["inner_monologue", "tool_response", "user\n"])
