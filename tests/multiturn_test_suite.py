@@ -43,7 +43,7 @@ def sample_parquet_file(processed_data_path, tmp_path):
 class TestDatasetInitialization:
     
     def test_default(self, sample_parquet_file, sample_tokenizer):
-        # Use truncation to handle long sequences
+        # truncation to handle long sequences
         config = {"truncation": "right", "max_length": 4096}
         dataset = MultiTurnSFTDataset(sample_parquet_file, sample_tokenizer, config)
         assert len(dataset) > 0
@@ -290,6 +290,21 @@ class TestIntegration:
             
             assert torch.all(item["attention_mask"] >= 0) and torch.all(item["attention_mask"] <= 1)
             assert torch.all(item["loss_mask"] >= 0) and torch.all(item["loss_mask"] <= 1)
+            tokens = []
+            for i in range(len(item["loss_mask"])):
+                if item["loss_mask"][i] == 1:
+                    tokens.append(item["input_ids"][i])
+                if item["loss_mask"][i] == 0 and tokens:
+                    message = sample_tokenizer.decode(tokens)
+                    print(f"decoded message (tokens={tokens}): '{message.tolist}'")
+                    assert "assistant\n" in message
+                    assert "<tool_call>" in message and "</tool_call>" in message 
+                    assert "<think>" in message and "</think>" in message 
+                    assert (i not in message for i in ["inner_monologue", "tool_response", "user\n"])
+                    tokens = []
+                    
+            
+                    
     
     def test_real_data(self, processed_data_path, sample_tokenizer):
         """Test with the actual processed data directly"""
