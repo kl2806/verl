@@ -354,6 +354,7 @@ class MultiTurnSFTDataset(Dataset):
         end_idx: int,
         is_assistant: bool = False,
         enable_thinking: Optional[bool] = None,
+        loss: Optional[int] = 0,
         tools: Optional[list[dict[str, Any]]] = None,
     ) -> tuple[list[int], list[int], list[int]]:
         """
@@ -408,7 +409,8 @@ class MultiTurnSFTDataset(Dataset):
                 add_special_tokens=False,
             )
             message_tokens = generation_prompt_tokens + _message_tokens
-            loss_mask = [0] * (len(generation_prompt_tokens)) + [1] * (
+            loss_mask = [0] * (len(generation_prompt_tokens)) + [loss] * (
+            # loss_mask = [0] * (len(generation_prompt_tokens)) + [1] * (
                 len(message_tokens) - len(generation_prompt_tokens)
             )
         else:
@@ -506,9 +508,14 @@ class MultiTurnSFTDataset(Dataset):
             cur_messages = messages[i]
             if cur_messages["role"] == "assistant":
                 # Process assistant message
-                tokens, loss_mask, attention_mask = self._process_message_tokens(
-                    messages, i, i + 1, is_assistant=True, enable_thinking=enable_thinking, tools=tools
-                )
+                if cur_messages["loss_mask"] == 1:
+                    tokens, loss_mask, attention_mask = self._process_message_tokens(
+                        messages, i, i + 1, is_assistant=True, loss=1, enable_thinking=enable_thinking, tools=tools
+                    )
+                else: 
+                    tokens, loss_mask, attention_mask = self._process_message_tokens(
+                        messages, i, i + 1, is_assistant=True, loss=0, enable_thinking=enable_thinking, tools=tools
+                    )
                 concat_tokens.extend(tokens)
                 concat_loss_mask.extend(loss_mask)
                 concat_attention_mask.extend(attention_mask)
