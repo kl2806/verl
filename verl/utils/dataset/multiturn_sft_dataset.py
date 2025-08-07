@@ -298,6 +298,7 @@ class MultiTurnSFTDataset(Dataset):
         self.messages_key = multiturn_config.get("messages_key", "messages")
         self.tools_key = multiturn_config.get("tools_key", "tools")
         self.enable_thinking_key = multiturn_config.get("enable_thinking_key", "enable_thinking")
+        self.loss_mask_key = multiturn_config.get("loss_mask_key", "loss_mask")
         assert self.truncation in ["error", "left", "right", "truncate_middle"]
 
         if not isinstance(parquet_files, list):
@@ -343,6 +344,11 @@ class MultiTurnSFTDataset(Dataset):
             self.enable_thinking = self.dataframe[self.enable_thinking_key].tolist()
         else:
             self.enable_thinking = None
+        # Extract loss_mask list from dataframe
+        if self.loss_mask_key in self.dataframe.columns:
+            self.loss_mask = self.dataframe[self.loss_mask_key].tolist()
+        else:
+            self.loss_mask = None
 
     def __len__(self):
         return len(self.messages)
@@ -478,6 +484,7 @@ class MultiTurnSFTDataset(Dataset):
     def __getitem__(self, item):
         tokenizer = self.tokenizer
         messages = self.messages[item]
+        message_loss_mask = self.loss_mask[item] if self.loss_mask is not None else None
         tools = self.tools[item] if self.tools is not None else None
         enable_thinking = self.enable_thinking[item] if self.enable_thinking is not None else None
 
@@ -508,7 +515,7 @@ class MultiTurnSFTDataset(Dataset):
             cur_messages = messages[i]
             if cur_messages["role"] == "assistant":
                 # Process assistant message
-                if cur_messages["loss_mask"] == 1:
+                if message_loss_mask[i] == 1:
                     tokens, loss_mask, attention_mask = self._process_message_tokens(
                         messages, i, i + 1, is_assistant=True, loss=1, enable_thinking=enable_thinking, tools=tools
                     )
