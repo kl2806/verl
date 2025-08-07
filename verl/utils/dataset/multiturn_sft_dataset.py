@@ -460,10 +460,10 @@ class MultiTurnSFTDataset(Dataset):
                 concat_diff_tokens = [concat_tokens[i] for i in diff_indices]
                 full_diff_decoded = self.tokenizer.decode(full_diff_tokens)
                 concat_diff_decoded = self.tokenizer.decode(concat_diff_tokens)
-            logging.warning(
-                f"Token mismatch detected! Full tokenization length: {len(full_tokens_list)}, Concatenated tokens "
-                f"length: {len(concat_tokens)}. Using concatenated version."
-            )
+            # logging.warning(
+            #     f"Token mismatch detected! Full tokenization length: {len(full_tokens_list)}, Concatenated tokens "
+            #     f"length: {len(concat_tokens)}. Using concatenated version."
+            # )
             # logging.warning(
             #     f"\n\n\nToken mismatch diff indices: {diff_indices}\n"
             #     f"full tokens decoded (at diff): {full_diff_decoded}\n"

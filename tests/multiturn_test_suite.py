@@ -48,6 +48,7 @@ class TestDatasetInitialization:
         dataset = MultiTurnSFTDataset(sample_parquet_file, sample_tokenizer, config)
         assert len(dataset) > 0
         item = dataset[0]
+        print(item)
         assert all(key in item for key in ["input_ids", "attention_mask", "loss_mask", "position_ids"])
         
     def test_custom(self, sample_parquet_file, sample_tokenizer):

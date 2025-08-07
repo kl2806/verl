@@ -143,11 +143,11 @@ def evaluate_generations(generations):
     for i, generation in enumerate(generations):
         tag_errors_count = 0
         json_valid, error_msg, _ = validate_json_generation(generation)
-        if generation.count("<tool_call>") == 0:
+        if generation.count("<tool_call>") == 0 or generation.count("</tool_call>") == 0:
             tag_errors_count += 1
             json_valid = False
             print(f"✗ Generation {i+1} does not have <tool_call> tags")
-        if generation.count("<tool_call>") != generation.count("</tool_call>"):
+        elif generation.count("<tool_call>") != generation.count("</tool_call>"):
             tag_errors_count += 1
             print(f"✗ Generation {i+1} has a mismatched number of <tool_call> tags")
         else:
