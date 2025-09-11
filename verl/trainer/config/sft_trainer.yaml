@@ -57,4 +57,3 @@ trainer:
   seed: 1
   validation_prompts_file_path: null  # Path to validation generation prompts parquet file
   gold_responses_path: null  # Path to gold responses JSON file for evaluation
-
