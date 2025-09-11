@@ -443,6 +443,9 @@ class FSDPSFTTrainer:
                 input_ids_rmpad_rolled = input_ids_rmpad_rolled.squeeze(0)  # ((total_nnz / sp) + pad)
 
                 # Forward pass
+                # print the shape of input_ids_rmpad_sliced and position_ids_rmpad_padded
+                print(f"input_ids_rmpad_sliced shape: {input_ids_rmpad_sliced.shape}")
+                print(f"position_ids_rmpad_padded shape: {position_ids_rmpad_padded.shape}")
                 output = self.fsdp_model(
                     input_ids=input_ids_rmpad_sliced,
                     attention_mask=None,  # Not needed with flash attention varlen
@@ -529,8 +532,12 @@ class FSDPSFTTrainer:
         return loss
 
     def load_validation_prompts(self, max_prompts=None):
-        """Load prompts from validation_generation_prompts.parquet file"""
-        parquet_path = "/home/riddhi/letta-synthetic-data/data/validation_generation_prompts.parquet"
+        """Load prompts from validation prompts parquet file"""
+        parquet_path = getattr(self.config.trainer, 'validation_prompts_file_path', None)
+        
+        if not parquet_path:
+            print("Warning: validation_prompts_file_path not configured in config")
+            return []
         
         if not os.path.exists(parquet_path):
             print(f"Warning: Validation prompts file not found at {parquet_path}")
@@ -580,7 +587,7 @@ class FSDPSFTTrainer:
                     prompt_data.append(processed_messages)
                     count += 1
             
-            print(f"Loaded {len(prompt_data)} prompts from validation_generation_prompts.parquet")
+            print(f"Loaded {len(prompt_data)} prompts from {parquet_path}")
             return prompt_data
             
         except Exception as e:
@@ -763,9 +770,13 @@ class FSDPSFTTrainer:
 
     def fit(self):
         import json
-        gold_responses_path = "/home/riddhi/letta-synthetic-data/data/gold_responses.json"
-        with open(gold_responses_path, "r") as f:
-            gold_responses_dict = json.load(f)
+        gold_responses_path = self.config.trainer.gold_responses_path
+        gold_responses_dict = {}
+        if gold_responses_path is not None:
+            if not os.path.exists(gold_responses_path):
+                raise FileNotFoundError(f"Gold responses file not found: {gold_responses_path}")
+            with open(gold_responses_path, "r") as f:
+                gold_responses_dict = json.load(f)
         print("=== FIT METHOD STARTED ===")
         rank = self.device_mesh.get_rank()
         print(f"Current rank: {rank}")
@@ -793,11 +804,11 @@ class FSDPSFTTrainer:
             prompts, generations = self.generate_samples(use_validation_prompts=True)
             initial_prompts.extend(prompts)
             initial_generations.extend(generations)
-        
+ 
         if rank == 0 and initial_prompts and initial_generations and val_generations_logger is not None and tracking is not None:
             json_rates, tag_errors = evaluate_generations(initial_generations)
             
-            gold_responses = [entry["gold_response"] for entry in gold_responses_dict]
+            gold_responses = [entry["gold_response"] for entry in gold_responses_dict] if gold_responses_dict else ["N/A"] * len(initial_prompts)
             initial_samples = []
             num_initial_samples_to_log = min(15, len(initial_prompts))
             for i in range(num_initial_samples_to_log):
@@ -856,12 +867,6 @@ class FSDPSFTTrainer:
             val_losses = []
             all_prompts = []
             all_generations = []
-            
-            # Collect a few samples for generation (limit to avoid too much output)
-            max_samples_to_generate = int(os.getenv("VERL_MAX_VAL_SAMPLES", 
-                getattr(self.config.trainer, "max_val_samples", 15) if hasattr(self.config.trainer, "max_val_samples") else 15))
-            samples_generated = 0
-            
             for data in self.val_dataloader:
                 # data = TensorDict(data, batch_size=self.config.data.micro_batch_size_per_gpu).cuda()
                 val_loss = self.validation_step(data)
@@ -894,7 +899,7 @@ class FSDPSFTTrainer:
                         print(f"Generation {i+1}: {all_generations[i]}")
                         print("-" * 50)
                     
-                    gold_responses = [entry["gold_response"] for entry in gold_responses_dict]
+                    gold_responses = [entry["gold_response"] for entry in gold_responses_dict] if gold_responses_dict else ["N/A"] * len(all_prompts)
                 
                     val_samples = []
                     for prompt, generation, gold_response, json_rate, tag_error in zip(all_prompts, all_generations, gold_responses, json_rates, tag_errors):
@@ -924,7 +929,6 @@ def main(config):
     tokenizer = hf_tokenizer(local_model_path, trust_remote_code=config.model.trust_remote_code)
     train_dataset = create_sft_dataset(config.data.train_files, config.data, tokenizer)
     val_dataset = create_sft_dataset(config.data.val_files, config.data, tokenizer)
-    import pdb; pdb.set_trace()
 
     trainer = FSDPSFTTrainer(config=config, device_mesh=device_mesh, ulysses_device_mesh=ulysses_device_mesh, tokenizer=tokenizer, train_dataset=train_dataset, val_dataset=val_dataset)
     trainer.fit()
