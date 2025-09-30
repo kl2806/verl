@@ -261,7 +261,7 @@ class vLLMHttpServer:
         async with build_async_engine_client(args) as engine_client:
             app = build_app(args)
 
-            vllm_config = await engine_client.get_vllm_config()
+            vllm_config = await engine_client.get_model_config()
             await init_app_state(engine_client, vllm_config, app.state, args)
             if self.replica_rank == 0 and self.node_rank == 0:
                 logger.info(f"Initializing a V1 LLM engine with config: {vllm_config}")
