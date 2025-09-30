@@ -1,0 +1,20 @@
+# Agent loop configuration for Letta React Agent Loop
+# This should be a list of agent loop configurations
+- name: "letta_react_agent"
+  _target_: recipe.letta_agent.react_agent_loop.ReactAgentLoop
+  tools: ["search_web", "calculator"]
+  
+# Example tool configuration (this would be in a separate tool config file)
+# tools:
+#   - name: "search_web"
+#     description: "Search the web for information"
+#   - name: "calculator"
+#     description: "Perform mathematical calculations"
+
+# Letta-specific configuration (this would be in the main config)
+# letta:
+#   api_endpoint: "https://api.letta.ai/v1"
+#   agent_id: "your_agent_id_here"
+#   model: "gpt-4"
+#   temperature: 0.7
+#   max_tokens: 1000
