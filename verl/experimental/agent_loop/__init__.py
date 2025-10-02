@@ -16,6 +16,12 @@ from .agent_loop import AgentLoopBase, AgentLoopManager, AsyncLLMServerManager
 from .single_turn_agent_loop import SingleTurnAgentLoop
 from .tool_agent_loop import ToolAgentLoop
 
+# Import letta agent to register it
+try:
+    import recipe.letta_agent
+except ImportError:
+    pass
+
 _ = [SingleTurnAgentLoop, ToolAgentLoop]
 
 __all__ = ["AgentLoopBase", "AgentLoopManager", "AsyncLLMServerManager"]

@@ -86,7 +86,15 @@ class ChatModel(BaseChatModel):
         Returns:
             A Runnable that returns a message.
         """
-        formatted_tools: list = [convert_to_openai_tool(tool) for tool in tools]
+        # Convert BaseTool instances to OpenAI format
+        formatted_tools: list = []
+        for tool in tools:
+            if hasattr(tool, 'get_openai_tool_schema'):
+                # BaseTool instance - use its schema
+                formatted_tools.append(tool.get_openai_tool_schema().model_dump())
+            else:
+                # Regular function - use LangChain's converter
+                formatted_tools.append(convert_to_openai_tool(tool))
 
         # used to remove system prompt prefix when encoding tool response
         system_prompt = self.tokenizer.apply_chat_template([{}], add_generation_prompt=False, tokenize=True)

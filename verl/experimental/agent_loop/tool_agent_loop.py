@@ -84,6 +84,7 @@ class ToolAgentLoop(AgentLoopBase):
             return
         cls._class_initialized = True
         print("Performing class-level ToolAgentLoop initialization")
+        print("DEBUG: ToolAgentLoop.init_class() called")
 
         # Initialize tools from config file
         cls.tokenizer = tokenizer
@@ -113,7 +114,9 @@ class ToolAgentLoop(AgentLoopBase):
 
     @rollout_trace_op
     async def run(self, sampling_params: dict[str, Any], **kwargs) -> AgentLoopOutput:
+        print("DEBUG: ToolAgentLoop.run() called")
         messages = list(kwargs["raw_prompt"])
+        print(f"DEBUG: messages count: {len(messages)}")
         image_data = copy.deepcopy(kwargs.get("multi_modal_data", {}).get("image", None))
         metrics = {}
         request_id = uuid4().hex

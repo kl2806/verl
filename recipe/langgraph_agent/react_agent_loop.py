@@ -76,6 +76,16 @@ class ReactAgentLoop(AgentLoopBase):
         cls._class_initialized = True
         print("Performing class-level ReactAgentLoop initialization")
 
+        # Initialize tools from config file
+        from verl.tools.utils.tool_registry import initialize_tools_from_config
+        
+        cls.tokenizer = tokenizer
+        tool_config_path = config.actor_rollout_ref.rollout.multi_turn.tool_config_path
+        tool_list = initialize_tools_from_config(tool_config_path) if tool_config_path else []
+        cls.tools = {tool.name: tool for tool in tool_list}
+        cls.tool_list = tool_list  # Store the list for ToolNode
+        print(f"Initialized tools: {cls.tools}")
+
         # build graph
         cls.graph = cls.build_graph()
 
@@ -84,7 +94,7 @@ class ReactAgentLoop(AgentLoopBase):
         workflow = StateGraph(MessagesState)
 
         workflow.add_node("agent", call_model)
-        workflow.add_node("tools", ToolNode(cls.tools))
+        workflow.add_node("tools", ToolNode(cls.tool_list))
         workflow.set_entry_point("agent")
         workflow.add_conditional_edges(
             "agent",
@@ -115,7 +125,7 @@ class ReactAgentLoop(AgentLoopBase):
             tool_parser=rollout.multi_turn.format,
         )
 
-        model = model.bind_tools(self.tools, tool_choice="any")
+        model = model.bind_tools(self.tool_list, tool_choice="any")
 
         config = {
             "configurable": {

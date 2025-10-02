@@ -48,7 +48,7 @@ python -m verl.trainer.main_ppo \
     trainer.critic_warmup=0 \
     trainer.logger='["console","wandb"]' \
     trainer.project_name='verl_grpo_example_gsm8k' \
-    trainer.experiment_name='qwen3' \
+    trainer.experiment_name='qwen3-letta-async' \
     trainer.val_before_train=False \
     trainer.n_gpus_per_node=1 \
     trainer.nnodes=1 \

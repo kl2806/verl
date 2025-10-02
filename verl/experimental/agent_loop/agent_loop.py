@@ -393,11 +393,19 @@ class AgentLoopWorker:
         self.tokenizer = hf_tokenizer(local_path, trust_remote_code=True)
         self.processor = hf_processor(local_path, trust_remote_code=True)
 
+        # Import agent loop modules to trigger @register decorators
+        try:
+            import recipe.letta_agent  # This will trigger the @register decorator
+        except ImportError:
+            pass  # Module not available, continue without it
+        
         agent_loop_config_path = config.actor_rollout_ref.rollout.agent.agent_loop_config_path
         if agent_loop_config_path:
             agent_loop_configs = OmegaConf.load(agent_loop_config_path)
             for agent_loop_config in agent_loop_configs:
                 _agent_loop_registry[agent_loop_config.name] = agent_loop_config
+        
+        print(f"DEBUG: Registered agent loops: {list(_agent_loop_registry.keys())}", flush=True)
         if self.config.actor_rollout_ref.model.get("custom_chat_template", None) is not None:
             if self.processor is not None:
                 self.processor.chat_template = self.config.actor_rollout_ref.model.custom_chat_template
@@ -454,7 +462,12 @@ class AgentLoopWorker:
 
         # by default, we assume it's a single turn agent
         if "agent_name" not in batch.non_tensor_batch:
-            batch.non_tensor_batch["agent_name"] = np.array(["single_turn_agent"] * len(batch), dtype=object)
+            batch.non_tensor_batch["agent_name"] = np.array(["letta_react_agent"] * len(batch), dtype=object)
+        else:
+            # Override any existing agent_name to use letta_react_agent
+            batch.non_tensor_batch["agent_name"] = np.array(["letta_react_agent"] * len(batch), dtype=object)
+        
+        print(f"DEBUG: Using agent names: {batch.non_tensor_batch['agent_name']}", flush=True)
 
         if "index" in batch.non_tensor_batch:
             index = batch.non_tensor_batch["index"]
